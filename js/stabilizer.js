@@ -1,0 +1,81 @@
+// 착용 위치 안정화 (v15 이식)
+// 1단계 applyStopLock: 정지 잠금 — 임계값 이하 변화는 무시, 넘을 때만 적응형 게인으로 이동
+// 2단계 smoothTimed: 시간 기반 지수 보간 — 렌더 프레임마다 부드럽게 목표를 따라감
+
+import { clamp } from './fit-math.js';
+import { BIB_ASPECT } from './config.js';
+
+export function applyStopLock(prev, next) {
+  if (!prev) return next;
+
+  const norm = Math.max(next.width, 1);
+  const posDelta = Math.hypot(next.x - prev.x, next.y - prev.y) / norm;
+  const sizeDelta = Math.abs(next.width - prev.width) / norm;
+  const rotDelta = Math.abs(next.rotation - prev.rotation);
+  const yawDelta = Math.abs(next.yaw - prev.yaw);
+
+  // 임계값: 위치 1.4%, 크기 2.2%, 각도 1.2° — 이하면 게인 0으로 고정 유지
+  const posMoved = posDelta >= 0.014;
+  const sizeMoved = sizeDelta >= 0.022;
+  const rotMoved = rotDelta >= Math.PI / 150;
+
+  const posGain = posMoved ? clamp(0.34 + posDelta * 1.45, 0.34, 0.8) : 0;
+  const sizeGain = sizeMoved ? clamp(0.25 + sizeDelta, 0.25, 0.52) : 0;
+  const rotGain = rotMoved ? clamp(0.24 + rotDelta * 2, 0.24, 0.44) : 0;
+  const yawGain = yawDelta > 0.035 ? clamp(0.24 + yawDelta * 0.55, 0.24, 0.5) : 0;
+
+  // 큰 오인식이 튀지 않도록 프레임당 이동량 제한 (위치 12%, 크기 10%)
+  const maxMove = norm * 0.12;
+  const maxGrow = norm * 0.1;
+  const dx = clamp(next.x - prev.x, -maxMove, maxMove);
+  const dy = clamp(next.y - prev.y, -maxMove, maxMove);
+  const dw = clamp(next.width - prev.width, -maxGrow, maxGrow);
+
+  return {
+    x: prev.x + dx * posGain,
+    y: prev.y + dy * posGain,
+    width: prev.width + dw * sizeGain,
+    height: prev.height + (next.height - prev.height) * sizeGain,
+    rotation: prev.rotation + (next.rotation - prev.rotation) * rotGain,
+    yaw: prev.yaw + (next.yaw - prev.yaw) * yawGain,
+    pitch: prev.pitch + (next.pitch - prev.pitch) * yawGain,
+    confidence: Math.max(prev.confidence, next.confidence, 0.88),
+  };
+}
+
+export function smoothTimed(prev, target, deltaMs) {
+  if (!prev) return target;
+
+  const dt = clamp(deltaMs, 4, 40) / 1000;
+  const speed = Math.hypot(target.x - prev.x, target.y - prev.y) / Math.max(target.width, 1);
+
+  // 움직임이 클수록 위치 응답 속도 상승 (17→최대 29)
+  const posAlpha = 1 - Math.exp(-(17 + Math.min(speed, 0.55) * 22) * dt);
+  const sizeAlpha = 1 - Math.exp(-12 * dt);
+  const rotAlpha = 1 - Math.exp(-10 * dt);
+  const angleAlpha = 1 - Math.exp(-8.5 * dt);
+  const confAlpha = 1 - Math.exp(-14 * dt);
+
+  // 목표에 충분히 가까우면 스냅해 잔떨림(오버슈트) 방지
+  const posSnap = Math.max(0.75, target.width * 0.0015);
+  const sizeSnap = Math.max(0.6, target.width * 0.0012);
+  const rotSnap = Math.PI / 720;
+
+  const x = prev.x + (target.x - prev.x) * posAlpha;
+  const y = prev.y + (target.y - prev.y) * posAlpha;
+  const width = prev.width + (target.width - prev.width) * sizeAlpha;
+  const height = prev.height + (target.height - prev.height) * sizeAlpha;
+  const rotation = prev.rotation + (target.rotation - prev.rotation) * rotAlpha;
+
+  return {
+    x: Math.abs(target.x - x) < posSnap ? target.x : x,
+    y: Math.abs(target.y - y) < posSnap ? target.y : y,
+    width: Math.abs(target.width - width) < sizeSnap ? target.width : width,
+    height:
+      Math.abs(target.height - height) < sizeSnap * BIB_ASPECT ? target.height : height,
+    rotation: Math.abs(target.rotation - rotation) < rotSnap ? target.rotation : rotation,
+    yaw: prev.yaw + (target.yaw - prev.yaw) * angleAlpha,
+    pitch: prev.pitch + (target.pitch - prev.pitch) * angleAlpha,
+    confidence: prev.confidence + (target.confidence - prev.confidence) * confAlpha,
+  };
+}
