@@ -71,6 +71,7 @@ export const STATUS_MESSAGES = {
   permission: '카메라 권한을 확인하고 있어요.',
   searching: '조금 떨어져 얼굴과 양쪽 어깨가 보이도록 맞춰주세요.',
   tracking: '몸 방향에 맞춰 입체 착용 위치를 맞추고 있어요.',
+  tooClose: '조금 뒤로 물러나면 턱받이 착용 모습이 보여요.',
   error: '카메라를 열 수 없어요. 권한을 허용하거나 사진으로 시도해 주세요.',
   photoLoading: '사진 속 착용 위치를 찾고 있어요.',
   photoTracked: '사진에서 착용 위치를 찾았어요. 아래에서 미세 조정할 수 있어요.',

@@ -10,6 +10,10 @@ export function applyStopLock(prev, next) {
 
   const norm = Math.max(next.width, 1);
   const posDelta = Math.hypot(next.x - prev.x, next.y - prev.y) / norm;
+
+  // 턱받이 폭의 90% 이상 떨어진 목표는 추적 이동이 아니라 재획득 —
+  // 이동량 제한으로 화면을 가로질러 미끄러지지 않도록 즉시 스냅한다.
+  if (posDelta > 0.9) return next;
   const sizeDelta = Math.abs(next.width - prev.width) / norm;
   const rotDelta = Math.abs(next.rotation - prev.rotation);
   const yawDelta = Math.abs(next.yaw - prev.yaw);
@@ -48,6 +52,9 @@ export function smoothTimed(prev, target, deltaMs) {
 
   const dt = clamp(deltaMs, 4, 40) / 1000;
   const speed = Math.hypot(target.x - prev.x, target.y - prev.y) / Math.max(target.width, 1);
+
+  // 재획득 수준의 큰 점프는 보간하지 않고 즉시 스냅 (긴 글라이드 방지)
+  if (speed > 1.2) return target;
 
   // 움직임이 클수록 위치 응답 속도 상승 (17→최대 29)
   const posAlpha = 1 - Math.exp(-(17 + Math.min(speed, 0.55) * 22) * dt);

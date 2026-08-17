@@ -403,7 +403,14 @@ function loop() {
           if (fitRing.length > DETECT.medianWindow) fitRing.shift();
           lockedFit = applyStopLock(lockedFit, medianFit(fitRing));
         }
-        setStatus('tracking', STATUS_MESSAGES.tracking);
+        // 너무 가까워 턱받이가 화면 아래로 벗어나면 안내 (추적은 유지)
+        const adjusted = withAdjust(lockedFit ?? merged.fit);
+        const bibTop = adjusted.y - adjusted.height / 2;
+        const offscreen = bibTop > els.canvas.height * 0.88;
+        setStatus(
+          'tracking',
+          offscreen ? STATUS_MESSAGES.tooClose : STATUS_MESSAGES.tracking,
+        );
       } else {
         missCount += 1;
       }
