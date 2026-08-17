@@ -14,6 +14,18 @@ export const isFiniteFit = (f) =>
     Number.isFinite,
   );
 
+// 유한하지만 비현실적인 값도 차단한다. 실기기에서 GPU가 부분 실패한 프레임이
+// x=-1.17e24 같은 값을 반환한 사례가 있다 — 유한하므로 isFiniteFit는 통과한다.
+// 프레임 크기를 기준으로 물리적으로 가능한 범위인지 함께 검사한다.
+export const isPlausibleFit = (f, videoWidth, videoHeight) =>
+  isFiniteFit(f) &&
+  f.width > videoWidth * 0.05 &&
+  f.width < videoWidth * 3 &&
+  f.height > 0 &&
+  f.height < videoHeight * 3 &&
+  Math.abs(f.x) < videoWidth * 3 &&
+  Math.abs(f.y) < videoHeight * 3;
+
 // 어깨선 각도 정규화: ±90°로 접고, 미세 각도(π/240)는 무시,
 // 0.82 게인으로 완화한 뒤 최대 ±16°(π/11.25)로 제한한다.
 export function normalizeRotation(angle) {
@@ -116,7 +128,7 @@ export function poseToFit(landmarks, videoWidth, videoHeight, mirrored) {
     pitch: 0,
     confidence: clamp(visibility * 1.35, 0.5, 1),
   };
-  return isFiniteFit(fit) ? fit : null;
+  return isPlausibleFit(fit, videoWidth, videoHeight) ? fit : null;
 }
 
 // Face Landmarker(478점) → 핏. 1 코끝, 152 턱끝, 33/263 눈꼬리, 234/454 귀 옆.
@@ -162,7 +174,7 @@ export function faceToFit(landmarks, videoWidth, videoHeight, mirrored) {
     pitch,
     confidence: 0.94,
   };
-  return isFiniteFit(fit) ? fit : null;
+  return isPlausibleFit(fit, videoWidth, videoHeight) ? fit : null;
 }
 
 // 얼굴 윤곽 → 가림 마스크 폴리곤 (턱·목이 턱받이 앞에 보이도록)
@@ -175,6 +187,31 @@ export function faceOcclusionMask(landmarks, videoWidth, videoHeight, mirrored) 
   );
   if (!oval.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))) return null;
   return { oval, neck: [] };
+}
+
+// 포즈 단독 핏에 "포즈→융합" 보정량을 적용해 소스 전환 시 위치가 튀지 않게 한다.
+// 얼굴 추적이 느려져(CPU 폴백 등) 융합↔포즈가 번갈아 선택되면, 두 방식의
+// 체계적 위치 차이가 그대로 화면 점프로 나타나기 때문이다.
+export function applyFusionOffset(poseFit, offset) {
+  if (!offset) return poseFit;
+  const width = poseFit.width * offset.widthRatio;
+  return {
+    ...poseFit,
+    x: poseFit.x + poseFit.width * offset.dxRatio,
+    y: poseFit.y + poseFit.height * offset.dyRatio,
+    width,
+    height: width * BIB_ASPECT,
+  };
+}
+
+// 융합 결과와 포즈 단독 결과의 상대 차이 (프레임 크기에 무관하도록 비율로 저장)
+export function measureFusionOffset(poseFit, fusedFit) {
+  if (!poseFit || !fusedFit || poseFit.width <= 0 || poseFit.height <= 0) return null;
+  return {
+    dxRatio: (fusedFit.x - poseFit.x) / poseFit.width,
+    dyRatio: (fusedFit.y - poseFit.y) / poseFit.height,
+    widthRatio: fusedFit.width / poseFit.width,
+  };
 }
 
 // 가림 마스크 시간 보간 (0.38 lerp) — 윤곽 떨림 완화

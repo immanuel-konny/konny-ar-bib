@@ -17,6 +17,9 @@ import {
   fuseFits,
   medianFit,
   isFiniteFit,
+  isPlausibleFit,
+  applyFusionOffset,
+  measureFusionOffset,
 } from './fit-math.js';
 import { applyStopLock, smoothTimed } from './stabilizer.js';
 import {
@@ -91,6 +94,8 @@ let lockedFit = null; // 정지 잠금을 통과한 목표 핏
 let lastPose = null; // { fit, ts }
 let lastFace = null; // { fit, ts }
 let mask = null; // 얼굴 가림 폴리곤
+let maskTs = 0; // 마스크 갱신 시각 (오래되면 잘못된 위치를 지우므로 무효화)
+let fusionOffset = null; // 포즈 단독 → 융합 보정량 (소스 전환 연속성)
 let fitRing = []; // 중앙값 필터 링버퍼
 let lastSource = null;
 let lastFitTs = 0;
@@ -163,8 +168,8 @@ function updateHud(now) {
     `engine:${diag.engine} delegate:${delegatePref} input:${analyzeMode} stage:${stageIndex}${hasEverDetected ? '*' : ''}`,
     `video:${v?.videoWidth ?? 0}x${v?.videoHeight ?? 0} mobile:${isMobileSession}`,
     `pose:${diag.poseHits}/${diag.poseRuns} e${diag.poseErrors} face:${diag.faceHits}/${diag.faceRuns} e${diag.faceErrors}${faceForcedCpu ? ' faceCPU' : ''}`,
-    `fit:${renderedFit ? `${Math.round(renderedFit.x)},${Math.round(renderedFit.y)} w${Math.round(renderedFit.width)}` : '-'}`,
-    diag.lastError ? `err:${diag.lastError}` : '',
+    `fit:${renderedFit ? `${Math.round(renderedFit.x)},${Math.round(renderedFit.y)} w${Math.round(renderedFit.width)}` : '-'} mask:${mask ? 'y' : 'n'}`,
+    diag.lastError ? `err:${String(diag.lastError).replace(/\s+/g, ' ').slice(0, 72)}` : '',
   ].filter(Boolean).join('\n');
 }
 
@@ -274,6 +279,8 @@ function resetTracking() {
   lastPose = null;
   lastFace = null;
   mask = null;
+  maskTs = 0;
+  fusionOffset = null;
   fitRing = [];
   lastSource = null;
   lastFitTs = 0;
@@ -298,7 +305,7 @@ async function ensureEngines() {
 // 얼굴 엔진만 GPU에서 반복 실패하면(예: image_transformation INVALID_ARGUMENT)
 // 얼굴 엔진만 CPU로 재생성한다. 포즈는 건드리지 않는다.
 function maybeDowngradeFace() {
-  if (faceForcedCpu || faceDowngrading || diag.faceErrors < 5) return;
+  if (faceForcedCpu || faceDowngrading || diag.faceErrors < 2) return;
   faceDowngrading = true;
   console.warn('[ar] face landmarker: GPU 오류 반복 → CPU로 재생성');
   (async () => {
@@ -309,7 +316,7 @@ function maybeDowngradeFace() {
       faceForcedCpu = true;
       diag.engine = `${diag.engine.split('+face')[0]}+face(cpu)`;
     } catch (e) {
-      diag.lastError = `face-cpu: ${e?.message ?? e}`.slice(0, 160);
+      diag.lastError = `face-cpu: ${e?.message ?? e}`.replace(/\s+/g, ' ').slice(0, 72);
     } finally {
       faceDowngrading = false;
     }
@@ -377,7 +384,10 @@ function loop() {
 
   const now = performance.now();
   const poseInterval = isMobileSession ? DETECT.poseInterval.mobile : DETECT.poseInterval.desktop;
-  const faceInterval = isMobileSession ? DETECT.faceInterval.mobile : DETECT.faceInterval.desktop;
+  // 얼굴이 CPU로 내려간 기기에서는 추론이 느리므로 주기를 늘려 포즈를 굶기지 않는다
+  const faceInterval =
+    (isMobileSession ? DETECT.faceInterval.mobile : DETECT.faceInterval.desktop) *
+    (faceForcedCpu ? 1.8 : 1);
   const poseDue = now - lastPoseTs >= poseInterval;
   // 포즈·얼굴 감지를 서로 다른 프레임에 배치해 프레임 스파이크 방지.
   // 얼굴이 크게 밀렸을 때는 포즈 차례를 뺏을 수 있지만, 직전에도 얼굴이
@@ -414,7 +424,7 @@ function loop() {
         }
       } catch (error) {
         diag.poseErrors += 1;
-        diag.lastError = `pose: ${error?.message ?? error}`.slice(0, 160);
+        diag.lastError = `pose: ${error?.message ?? error}`.replace(/\s+/g, ' ').slice(0, 72);
       }
     }
     if (input && faceDue && faceLandmarker && !faceDowngrading) {
@@ -422,6 +432,8 @@ function loop() {
       lastDetector = 'face';
       diag.faceRuns += 1;
       try {
+        // __vtoFailFace: 실기기의 얼굴 엔진 GPU 실패를 재현하는 테스트 훅
+        if (window.__vtoFailFace) throw new Error('forced face failure (test hook)');
         const landmarks = faceLandmarker.detectForVideo(input, now).faceLandmarks?.[0];
         const fit = landmarks ? faceToFit(landmarks, vw, vh, state.mirrored) : null;
         const nextMask = landmarks
@@ -431,31 +443,48 @@ function loop() {
           lastFace = { fit, ts: now };
           diag.faceHits += 1;
         }
-        if (nextMask) mask = smoothMask(mask, nextMask);
+        if (nextMask) {
+          mask = smoothMask(mask, nextMask);
+          maskTs = now;
+        }
       } catch (error) {
         diag.faceErrors += 1;
-        diag.lastError = `face: ${error?.message ?? error}`.slice(0, 160);
+        diag.lastError = `face: ${error?.message ?? error}`.replace(/\s+/g, ' ').slice(0, 72);
         maybeDowngradeFace();
       }
     }
 
     const freshPose = lastPose && now - lastPose.ts < DETECT.poseFreshMs ? lastPose : null;
     const freshFace = lastFace && now - lastFace.ts < DETECT.faceFreshMs ? lastFace : null;
-    const merged =
-      freshPose && freshFace
-        ? {
-            fit: fuseFits(freshPose.fit, freshFace.fit),
-            ts: Math.max(freshPose.ts, freshFace.ts),
-          }
-        : freshPose ?? freshFace;
-    const source = freshPose && freshFace ? 'fusion' : freshPose ? 'pose' : freshFace ? 'face' : null;
 
-    if (merged && isFiniteFit(merged.fit)) {
+    // 소스 전환에 의한 위치 점프 제거:
+    // 포즈+얼굴이 모두 신선하면 융합하고 그 보정량을 기록한다.
+    // 얼굴이 끊기면 포즈 단독 결과에 마지막 보정량을 적용해 연속성을 유지한다.
+    let merged = null;
+    let source = null;
+    if (freshPose && freshFace) {
+      const fused = fuseFits(freshPose.fit, freshFace.fit);
+      fusionOffset = measureFusionOffset(freshPose.fit, fused) ?? fusionOffset;
+      merged = { fit: fused, ts: Math.max(freshPose.ts, freshFace.ts) };
+      source = 'fusion';
+    } else if (freshPose) {
+      merged = { fit: applyFusionOffset(freshPose.fit, fusionOffset), ts: freshPose.ts };
+      source = 'pose';
+    } else if (freshFace) {
+      merged = freshFace;
+      source = 'face';
+    }
+
+    if (merged && isPlausibleFit(merged.fit, vw, vh)) {
       missCount = 0;
       hasEverDetected = true;
       lastSuccessTs = now;
+      diag.lastError = null; // 정상 복구되면 이전 오류 표시를 지운다
       if (merged.ts !== lastFitTs) {
-        if (lastSource !== source) fitRing = [];
+        // 포즈↔융합은 보정량으로 정렬되므로 링을 비우지 않는다.
+        // 얼굴 단독은 기준이 달라 이때만 초기화한다.
+        const familyOf = (s) => (s === 'face' ? 'face' : 'pose');
+        if (familyOf(lastSource) !== familyOf(source)) fitRing = [];
         lastSource = source;
         lastFitTs = merged.ts;
         fitRing.push(merged.fit);
@@ -479,16 +508,27 @@ function loop() {
     if (now - lastSuccessTs > 2500) {
       setStatus('searching', STATUS_MESSAGES.searching);
       if (lockedFit) lockedFit.confidence *= DETECT.confidenceDecay;
+      // 충분히 사라졌으면 완전히 버린다. 다음 인식은 새 기준으로 즉시 배치되어
+      // 예전 위치에서 화면을 가로질러 미끄러져 오는 현상이 없어진다.
+      if (!lockedFit || lockedFit.confidence < 0.35) {
+        lockedFit = null;
+        renderedFit = null;
+        fitRing = [];
+        lastSource = null;
+      }
     }
   }
   if (state.mode === 'camera') maybeEscalateFallback(now);
 
-  // NaN 오염 자가 복구 — 잘못된 핏이 들어왔다면 버리고 재획득
-  if (lockedFit && !isFiniteFit(lockedFit)) {
+  // 오염된 핏 자가 복구 — 유한하지 않거나 비현실적인 값이면 버리고 재획득
+  if (lockedFit && !isPlausibleFit(lockedFit, els.canvas.width, els.canvas.height)) {
     lockedFit = null;
     renderedFit = null;
     fitRing = [];
   }
+
+  // 오래된 가림 마스크는 실제 얼굴 위치와 어긋나 엉뚱한 곳을 지우므로 무효화
+  if (mask && now - maskTs > 900) mask = null;
 
   const delta = lastFrameTs ? now - lastFrameTs : 16.7;
   lastFrameTs = now;
@@ -636,7 +676,10 @@ async function analyzePhoto(img) {
     const photoMask = faceLandmarks
       ? faceOcclusionMask(faceLandmarks, img.naturalWidth, img.naturalHeight, false)
       : null;
-    if (photoMask) mask = photoMask;
+    if (photoMask) {
+      mask = photoMask;
+      maskTs = Number.POSITIVE_INFINITY; // 정지 사진은 만료되지 않음
+    }
 
     const merged = poseFit && faceFit ? fuseFits(poseFit, faceFit) : poseFit ?? faceFit;
     const fallbackWidth = img.naturalWidth * 0.48;
