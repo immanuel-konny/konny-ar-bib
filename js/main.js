@@ -16,6 +16,7 @@ import {
   smoothMask,
   fuseFits,
   medianFit,
+  isFiniteFit,
 } from './fit-math.js';
 import { applyStopLock, smoothTimed } from './stabilizer.js';
 import {
@@ -119,14 +120,20 @@ let lastSuccessTs = 0; // 이번 세션 마지막 인식 성공 시각 (0 = 아�
 let hasEverDetected = false; // 이번 카메라 세션에서 인식 성공 여부
 let escalating = false; // 델리게이트 재생성 중 (감지 일시 중지)
 
+// 얼굴 엔진만 GPU에서 반복 실패하는 기기 대응: 5회 초과 시 얼굴만 CPU로 재생성
+let faceForcedCpu = false;
+let faceDowngrading = false;
+
 // ── 진단 (?debug=1 시 HUD 표시, window.__vtoDiag()는 항상 사용 가능) ──
 const debugEnabled = new URLSearchParams(location.search).has('debug');
 const diag = {
   engine: 'not-loaded',
   poseRuns: 0,
   poseHits: 0,
+  poseErrors: 0,
   faceRuns: 0,
   faceHits: 0,
+  faceErrors: 0,
   lastError: null,
   fps: 0,
 };
@@ -155,7 +162,7 @@ function updateHud(now) {
     `mode:${state.mode} status:${state.status} fps:${diag.fps}`,
     `engine:${diag.engine} delegate:${delegatePref} input:${analyzeMode} stage:${stageIndex}${hasEverDetected ? '*' : ''}`,
     `video:${v?.videoWidth ?? 0}x${v?.videoHeight ?? 0} mobile:${isMobileSession}`,
-    `pose:${diag.poseHits}/${diag.poseRuns} face:${diag.faceHits}/${diag.faceRuns}`,
+    `pose:${diag.poseHits}/${diag.poseRuns} e${diag.poseErrors} face:${diag.faceHits}/${diag.faceRuns} e${diag.faceErrors}${faceForcedCpu ? ' faceCPU' : ''}`,
     `fit:${renderedFit ? `${Math.round(renderedFit.x)},${Math.round(renderedFit.y)} w${Math.round(renderedFit.width)}` : '-'}`,
     diag.lastError ? `err:${diag.lastError}` : '',
   ].filter(Boolean).join('\n');
@@ -238,8 +245,9 @@ function analyzeSource(video) {
   if (analyzeMode !== 'downscale') return video;
   const longest = Math.max(video.videoWidth, video.videoHeight);
   const ratio = Math.min(1, DETECT.analyzeMax / Math.max(longest, 1));
-  const w = Math.max(2, Math.round(video.videoWidth * ratio));
-  const h = Math.max(2, Math.round(video.videoHeight * ratio));
+  // 짝수 치수 강제 — 일부 GPU의 image_transformation 노드가 홀수 폭에서 실패
+  const w = Math.max(2, Math.round(video.videoWidth * ratio) & ~1);
+  const h = Math.max(2, Math.round(video.videoHeight * ratio) & ~1);
   analyzeCanvas ??= document.createElement('canvas');
   if (analyzeCanvas.width !== w || analyzeCanvas.height !== h) {
     analyzeCanvas.width = w;
@@ -287,6 +295,27 @@ async function ensureEngines() {
   return poseLandmarker;
 }
 
+// 얼굴 엔진만 GPU에서 반복 실패하면(예: image_transformation INVALID_ARGUMENT)
+// 얼굴 엔진만 CPU로 재생성한다. 포즈는 건드리지 않는다.
+function maybeDowngradeFace() {
+  if (faceForcedCpu || faceDowngrading || diag.faceErrors < 5) return;
+  faceDowngrading = true;
+  console.warn('[ar] face landmarker: GPU 오류 반복 → CPU로 재생성');
+  (async () => {
+    try {
+      const next = await createFaceLandmarker('CPU');
+      faceLandmarker?.close();
+      faceLandmarker = next;
+      faceForcedCpu = true;
+      diag.engine = `${diag.engine.split('+face')[0]}+face(cpu)`;
+    } catch (e) {
+      diag.lastError = `face-cpu: ${e?.message ?? e}`.slice(0, 160);
+    } finally {
+      faceDowngrading = false;
+    }
+  })();
+}
+
 // 첫 인식 성공 전까지만: 5초마다 다음 입력·델리게이트 조합으로 순환
 function maybeEscalateFallback(now) {
   if (state.mode !== 'camera' || escalating || hasEverDetected) return;
@@ -313,6 +342,7 @@ function maybeEscalateFallback(now) {
       poseLandmarker = nextPose;
       faceLandmarker = nextFace;
       delegatePref = target;
+      faceForcedCpu = target === 'CPU';
       diag.engine = `${nextFace ? 'pose+face' : 'pose-only'}/${target.toLowerCase()}`;
     } catch (e) {
       diag.lastError = `recreate(${target}): ${e?.message ?? e}`;
@@ -360,26 +390,38 @@ function loop() {
   const runPose = poseDue && !faceDue;
 
   if ((runPose || faceDue) && !escalating) {
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    let input = null;
     try {
-      const input = analyzeSource(video);
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
+      input = analyzeSource(video);
+    } catch (error) {
+      diag.lastError = `input: ${error?.message ?? error}`;
+    }
 
-      if (runPose) {
-        lastPoseTs = now;
-        lastDetector = 'pose';
-        diag.poseRuns += 1;
+    // 포즈·얼굴을 각각 try로 감싼다 — 한쪽 엔진의 GPU 오류가
+    // 다른 쪽 결과 처리와 융합 로직까지 죽이지 않도록.
+    if (input && runPose) {
+      lastPoseTs = now;
+      lastDetector = 'pose';
+      diag.poseRuns += 1;
+      try {
         const landmarks = poseLandmarker.detectForVideo(input, now).landmarks?.[0];
         const fit = landmarks ? poseToFit(landmarks, vw, vh, state.mirrored) : null;
         if (fit) {
           lastPose = { fit, ts: now };
           diag.poseHits += 1;
         }
+      } catch (error) {
+        diag.poseErrors += 1;
+        diag.lastError = `pose: ${error?.message ?? error}`.slice(0, 160);
       }
-      if (faceDue && faceLandmarker) {
-        lastFaceTs = now;
-        lastDetector = 'face';
-        diag.faceRuns += 1;
+    }
+    if (input && faceDue && faceLandmarker && !faceDowngrading) {
+      lastFaceTs = now;
+      lastDetector = 'face';
+      diag.faceRuns += 1;
+      try {
         const landmarks = faceLandmarker.detectForVideo(input, now).faceLandmarks?.[0];
         const fit = landmarks ? faceToFit(landmarks, vw, vh, state.mirrored) : null;
         const nextMask = landmarks
@@ -390,57 +432,63 @@ function loop() {
           diag.faceHits += 1;
         }
         if (nextMask) mask = smoothMask(mask, nextMask);
+      } catch (error) {
+        diag.faceErrors += 1;
+        diag.lastError = `face: ${error?.message ?? error}`.slice(0, 160);
+        maybeDowngradeFace();
       }
+    }
 
-      const freshPose = lastPose && now - lastPose.ts < DETECT.poseFreshMs ? lastPose : null;
-      const freshFace = lastFace && now - lastFace.ts < DETECT.faceFreshMs ? lastFace : null;
-      const merged =
-        freshPose && freshFace
-          ? {
-              fit: fuseFits(freshPose.fit, freshFace.fit),
-              ts: Math.max(freshPose.ts, freshFace.ts),
-            }
-          : freshPose ?? freshFace;
-      const source = freshPose && freshFace ? 'fusion' : freshPose ? 'pose' : freshFace ? 'face' : null;
+    const freshPose = lastPose && now - lastPose.ts < DETECT.poseFreshMs ? lastPose : null;
+    const freshFace = lastFace && now - lastFace.ts < DETECT.faceFreshMs ? lastFace : null;
+    const merged =
+      freshPose && freshFace
+        ? {
+            fit: fuseFits(freshPose.fit, freshFace.fit),
+            ts: Math.max(freshPose.ts, freshFace.ts),
+          }
+        : freshPose ?? freshFace;
+    const source = freshPose && freshFace ? 'fusion' : freshPose ? 'pose' : freshFace ? 'face' : null;
 
-      if (merged) {
-        missCount = 0;
-        hasEverDetected = true;
-        lastSuccessTs = now;
-        if (merged.ts !== lastFitTs) {
-          if (lastSource !== source) fitRing = [];
-          lastSource = source;
-          lastFitTs = merged.ts;
-          fitRing.push(merged.fit);
-          if (fitRing.length > DETECT.medianWindow) fitRing.shift();
-          lockedFit = applyStopLock(lockedFit, medianFit(fitRing));
-        }
-        // 너무 가까워 턱받이가 화면 아래로 벗어나면 안내 (추적은 유지)
-        const adjusted = withAdjust(lockedFit ?? merged.fit);
-        const bibTop = adjusted.y - adjusted.height / 2;
-        const offscreen = bibTop > els.canvas.height * 0.88;
-        setStatus(
-          'tracking',
-          offscreen ? STATUS_MESSAGES.tooClose : STATUS_MESSAGES.tracking,
-        );
-      } else {
-        missCount += 1;
+    if (merged && isFiniteFit(merged.fit)) {
+      missCount = 0;
+      hasEverDetected = true;
+      lastSuccessTs = now;
+      if (merged.ts !== lastFitTs) {
+        if (lastSource !== source) fitRing = [];
+        lastSource = source;
+        lastFitTs = merged.ts;
+        fitRing.push(merged.fit);
+        if (fitRing.length > DETECT.medianWindow) fitRing.shift();
+        lockedFit = applyStopLock(lockedFit, medianFit(fitRing));
       }
-      // 일시적 인식 끊김(2.5초 이내)에는 상태·투명도를 유지해 깜빡임 방지.
-      // 그 이상 지속될 때만 '위치 찾는 중'으로 바꾸고 서서히 페이드아웃.
-      // (프레임 수가 아닌 시간 기준 — 저 fps 기기에서도 동일하게 동작)
-      if (now - lastSuccessTs > 2500) {
-        setStatus('searching', STATUS_MESSAGES.searching);
-        if (lockedFit) lockedFit.confidence *= DETECT.confidenceDecay;
-      }
-    } catch (error) {
-      diag.lastError = `detect: ${error?.message ?? error}`;
-      if (now - lastSuccessTs > 2500) {
-        setStatus('searching', STATUS_MESSAGES.searching);
-      }
+      // 너무 가까워 턱받이가 화면 아래로 벗어나면 안내 (추적은 유지)
+      const adjusted = withAdjust(lockedFit ?? merged.fit);
+      const bibTop = adjusted.y - adjusted.height / 2;
+      const offscreen = bibTop > els.canvas.height * 0.88;
+      setStatus(
+        'tracking',
+        offscreen ? STATUS_MESSAGES.tooClose : STATUS_MESSAGES.tracking,
+      );
+    } else {
+      missCount += 1;
+    }
+    // 일시적 인식 끊김(2.5초 이내)에는 상태·투명도를 유지해 깜빡임 방지.
+    // 그 이상 지속될 때만 '위치 찾는 중'으로 바꾸고 서서히 페이드아웃.
+    // (프레임 수가 아닌 시간 기준 — 저 fps 기기에서도 동일하게 동작)
+    if (now - lastSuccessTs > 2500) {
+      setStatus('searching', STATUS_MESSAGES.searching);
+      if (lockedFit) lockedFit.confidence *= DETECT.confidenceDecay;
     }
   }
   if (state.mode === 'camera') maybeEscalateFallback(now);
+
+  // NaN 오염 자가 복구 — 잘못된 핏이 들어왔다면 버리고 재획득
+  if (lockedFit && !isFiniteFit(lockedFit)) {
+    lockedFit = null;
+    renderedFit = null;
+    fitRing = [];
+  }
 
   const delta = lastFrameTs ? now - lastFrameTs : 16.7;
   lastFrameTs = now;

@@ -5,6 +5,15 @@ import { BIB_ASPECT, FACE_OVAL } from './config.js';
 
 export const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
+// 일부 기기에서 GPU 그래프가 실패한 프레임에 NaN 랜드마크를 반환한다.
+// NaN이 한 번 핏에 들어오면 모든 후속 보간이 NaN으로 오염되므로,
+// 핏은 반드시 유한값 검증을 통과해야 한다.
+export const isFiniteFit = (f) =>
+  !!f &&
+  [f.x, f.y, f.width, f.height, f.rotation, f.yaw, f.pitch, f.confidence].every(
+    Number.isFinite,
+  );
+
 // 어깨선 각도 정규화: ±90°로 접고, 미세 각도(π/240)는 무시,
 // 0.82 게인으로 완화한 뒤 최대 ±16°(π/11.25)로 제한한다.
 export function normalizeRotation(angle) {
@@ -97,7 +106,7 @@ export function poseToFit(landmarks, videoWidth, videoHeight, mirrored) {
   const zDiff = ((rs.z ?? 0) - (ls.z ?? 0)) / normDist;
   const yaw = clamp((mirrored ? -zDiff : zDiff) * 0.85, -1, 1);
 
-  return {
+  const fit = {
     x: shoulderMid.x * 0.76 + mouthMid.x * 0.24,
     y: anchorY + height * 0.28,
     width,
@@ -107,6 +116,7 @@ export function poseToFit(landmarks, videoWidth, videoHeight, mirrored) {
     pitch: 0,
     confidence: clamp(visibility * 1.35, 0.5, 1),
   };
+  return isFiniteFit(fit) ? fit : null;
 }
 
 // Face Landmarker(478점) → 핏. 1 코끝, 152 턱끝, 33/263 눈꼬리, 234/454 귀 옆.
@@ -142,7 +152,7 @@ export function faceToFit(landmarks, videoWidth, videoHeight, mirrored) {
     Math.atan2(eyeSecond.y - eyeFirst.y, eyeSecond.x - eyeFirst.x),
   );
 
-  return {
+  const fit = {
     x: earMidX + yaw * earDist * 0.04,
     y: chin.y + height * 0.34,
     width,
@@ -152,6 +162,7 @@ export function faceToFit(landmarks, videoWidth, videoHeight, mirrored) {
     pitch,
     confidence: 0.94,
   };
+  return isFiniteFit(fit) ? fit : null;
 }
 
 // 얼굴 윤곽 → 가림 마스크 폴리곤 (턱·목이 턱받이 앞에 보이도록)
@@ -159,10 +170,11 @@ export function faceOcclusionMask(landmarks, videoWidth, videoHeight, mirrored) 
   if (!landmarks[10] || !landmarks[152] || !landmarks[234] || !landmarks[454]) {
     return null;
   }
-  return {
-    oval: FACE_OVAL.map((i) => toPixel(landmarks[i], videoWidth, videoHeight, mirrored)),
-    neck: [],
-  };
+  const oval = FACE_OVAL.map((i) =>
+    toPixel(landmarks[i], videoWidth, videoHeight, mirrored),
+  );
+  if (!oval.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))) return null;
+  return { oval, neck: [] };
 }
 
 // 가림 마스크 시간 보간 (0.38 lerp) — 윤곽 떨림 완화
