@@ -1,4 +1,4 @@
-# KONNY BIB — AR 가상착용 (VR Try-On)
+# KONNY BIB — AR 가상착용 (AR Try-On)
 
 코니 턱받이를 브라우저에서 실시간 가상 착용해보는 WebAR 서비스입니다.
 ChatGPT로 개발한 베타 **v15**(`konny-bib-ar-beta.se0-immanuel.chatgpt.site`)의

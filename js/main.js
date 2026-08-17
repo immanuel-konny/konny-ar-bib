@@ -100,14 +100,24 @@ let lastFrameTs = 0;
 let lastDetector = null; // 저 fps에서 얼굴이 포즈를 굶기지 않도록 교차 실행에 사용
 
 // ── 적응형 폴백 상태 ──────────────────────────────────────────
-// 일부 모바일 GPU에서 다운스케일 캔버스 입력 감지가 실패하는 사례가 있어
-// 일정 시간 인식이 전혀 없으면 단계적으로 전환한다:
-// downscale(모바일 기본) → direct(비디오 직접) → CPU 델리게이트 재생성
-const FALLBACK_WAIT_MS = 3500;
+// 일부 모바일 기기에서 특정 입력(다운스케일 캔버스)·델리게이트(GPU) 조합의
+// 감지가 실패하는 사례가 있다. "이번 카메라 세션에서 인식이 한 번도 성공하기
+// 전"에만 5초 간격으로 조합을 순환하고, 한 번이라도 성공하면 그 조합으로
+// 고정한다. (사용자가 늦게 프레임에 들어와도 엔진을 불필요하게 강등하지 않음)
+const FALLBACK_STAGE_MS = 5000;
+const FALLBACK_STAGES = [
+  { input: 'downscale', delegate: 'GPU' }, // 모바일 기본
+  { input: 'direct', delegate: 'GPU' }, // 데스크톱 기본
+  { input: 'downscale', delegate: 'CPU' },
+  { input: 'direct', delegate: 'CPU' },
+];
+let stageIndex = 1;
 let analyzeMode = 'direct'; // 'downscale' | 'direct'
 let delegatePref = 'GPU'; // 'GPU' | 'CPU'
-let detectBaselineTs = 0; // 마지막 성공 또는 폴백 전환 시점
-let escalating = false;
+let stageStartTs = 0; // 현재 스테이지 시작 시각
+let lastSuccessTs = 0; // 이번 세션 마지막 인식 성공 시각 (0 = 아직 없음)
+let hasEverDetected = false; // 이번 카메라 세션에서 인식 성공 여부
+let escalating = false; // 델리게이트 재생성 중 (감지 일시 중지)
 
 // ── 진단 (?debug=1 시 HUD 표시, window.__vtoDiag()는 항상 사용 가능) ──
 const debugEnabled = new URLSearchParams(location.search).has('debug');
@@ -143,7 +153,7 @@ function updateHud(now) {
   const v = els.video;
   hudEl.textContent = [
     `mode:${state.mode} status:${state.status} fps:${diag.fps}`,
-    `engine:${diag.engine} delegate:${delegatePref} input:${analyzeMode}`,
+    `engine:${diag.engine} delegate:${delegatePref} input:${analyzeMode} stage:${stageIndex}${hasEverDetected ? '*' : ''}`,
     `video:${v?.videoWidth ?? 0}x${v?.videoHeight ?? 0} mobile:${isMobileSession}`,
     `pose:${diag.poseHits}/${diag.poseRuns} face:${diag.faceHits}/${diag.faceRuns}`,
     `fit:${renderedFit ? `${Math.round(renderedFit.x)},${Math.round(renderedFit.y)} w${Math.round(renderedFit.width)}` : '-'}`,
@@ -157,6 +167,8 @@ window.__vtoDiag = () => ({
   status: state.status,
   analyzeMode,
   delegatePref,
+  stageIndex,
+  hasEverDetected,
   isMobileSession,
   video: { w: els.video?.videoWidth ?? 0, h: els.video?.videoHeight ?? 0 },
   renderedFit: renderedFit && {
@@ -275,41 +287,40 @@ async function ensureEngines() {
   return poseLandmarker;
 }
 
-// 카메라가 재생 중인데 FALLBACK_WAIT_MS 동안 인식이 전혀 없으면 단계 전환
+// 첫 인식 성공 전까지만: 5초마다 다음 입력·델리게이트 조합으로 순환
 function maybeEscalateFallback(now) {
-  if (state.mode !== 'camera' || escalating) return;
-  if (now - detectBaselineTs < FALLBACK_WAIT_MS) return;
+  if (state.mode !== 'camera' || escalating || hasEverDetected) return;
+  if (now - stageStartTs < FALLBACK_STAGE_MS) return;
 
-  if (analyzeMode === 'downscale') {
-    analyzeMode = 'direct';
-    detectBaselineTs = now;
-    diag.lastError = null;
-    console.warn('[vto] fallback: downscale → direct video input');
-    return;
-  }
-  if (delegatePref === 'GPU') {
-    escalating = true;
-    delegatePref = 'CPU';
-    console.warn('[vto] fallback: GPU → CPU delegate 재생성');
-    (async () => {
-      try {
-        const nextPose = await createPoseLandmarker('CPU');
-        const nextFace = await createFaceLandmarker('CPU');
-        poseLandmarker?.close();
-        faceLandmarker?.close();
-        poseLandmarker = nextPose;
-        faceLandmarker = nextFace;
-        diag.engine = `${nextFace ? 'pose+face' : 'pose-only'}/cpu`;
-        // 모바일 CPU에서도 감당 가능하도록 다운스케일 입력으로 복귀
-        if (isMobileSession) analyzeMode = 'downscale';
-      } catch (e) {
-        diag.lastError = `cpu-recreate: ${e?.message ?? e}`;
-      } finally {
-        escalating = false;
-        detectBaselineTs = performance.now();
-      }
-    })();
-  }
+  stageIndex = (stageIndex + 1) % FALLBACK_STAGES.length;
+  const stage = FALLBACK_STAGES[stageIndex];
+  stageStartTs = now;
+  analyzeMode = stage.input;
+  diag.lastError = null;
+  console.warn(`[ar] fallback stage ${stageIndex}: ${stage.input}/${stage.delegate}`);
+
+  if (stage.delegate === delegatePref) return;
+
+  // 델리게이트 변경은 엔진 재생성 필요 — 재생성 동안 감지는 일시 중지
+  escalating = true;
+  const target = stage.delegate;
+  (async () => {
+    try {
+      const nextPose = await createPoseLandmarker(target);
+      const nextFace = await createFaceLandmarker(target);
+      poseLandmarker?.close();
+      faceLandmarker?.close();
+      poseLandmarker = nextPose;
+      faceLandmarker = nextFace;
+      delegatePref = target;
+      diag.engine = `${nextFace ? 'pose+face' : 'pose-only'}/${target.toLowerCase()}`;
+    } catch (e) {
+      diag.lastError = `recreate(${target}): ${e?.message ?? e}`;
+    } finally {
+      escalating = false;
+      stageStartTs = performance.now();
+    }
+  })();
 }
 
 // ── 메인 추적 루프 ────────────────────────────────────────────
@@ -348,7 +359,7 @@ function loop() {
       (now - lastFaceTs > faceInterval * 1.45 && lastDetector !== 'face'));
   const runPose = poseDue && !faceDue;
 
-  if (runPose || faceDue) {
+  if ((runPose || faceDue) && !escalating) {
     try {
       const input = analyzeSource(video);
       const vw = video.videoWidth;
@@ -394,7 +405,8 @@ function loop() {
 
       if (merged) {
         missCount = 0;
-        detectBaselineTs = now;
+        hasEverDetected = true;
+        lastSuccessTs = now;
         if (merged.ts !== lastFitTs) {
           if (lastSource !== source) fitRing = [];
           lastSource = source;
@@ -414,16 +426,21 @@ function loop() {
       } else {
         missCount += 1;
       }
-      if (missCount > DETECT.missLimit) {
+      // 일시적 인식 끊김(2.5초 이내)에는 상태·투명도를 유지해 깜빡임 방지.
+      // 그 이상 지속될 때만 '위치 찾는 중'으로 바꾸고 서서히 페이드아웃.
+      // (프레임 수가 아닌 시간 기준 — 저 fps 기기에서도 동일하게 동작)
+      if (now - lastSuccessTs > 2500) {
         setStatus('searching', STATUS_MESSAGES.searching);
         if (lockedFit) lockedFit.confidence *= DETECT.confidenceDecay;
       }
     } catch (error) {
       diag.lastError = `detect: ${error?.message ?? error}`;
-      setStatus('searching', STATUS_MESSAGES.searching);
+      if (now - lastSuccessTs > 2500) {
+        setStatus('searching', STATUS_MESSAGES.searching);
+      }
     }
-    maybeEscalateFallback(now);
   }
+  if (state.mode === 'camera') maybeEscalateFallback(now);
 
   const delta = lastFrameTs ? now - lastFrameTs : 16.7;
   lastFrameTs = now;
@@ -457,8 +474,11 @@ async function startCamera(facing = state.facing) {
 
     // __vtoForceMobile: 테스트에서 모바일 경로를 강제하기 위한 훅
     isMobileSession = window.__vtoForceMobile ?? window.matchMedia(MOBILE_QUERY).matches;
-    analyzeMode = isMobileSession ? 'downscale' : 'direct';
-    detectBaselineTs = performance.now();
+    stageIndex = isMobileSession ? 0 : 1;
+    analyzeMode = FALLBACK_STAGES[stageIndex].input;
+    hasEverDetected = false;
+    lastSuccessTs = 0;
+    stageStartTs = performance.now();
     diag.lastError = null;
     setMode('camera');
     setStatus('loading', STATUS_MESSAGES.permission);
@@ -519,7 +539,7 @@ async function startCamera(facing = state.facing) {
     els.backdrop.play().catch(() => undefined);
 
     setStatus('searching', STATUS_MESSAGES.searching);
-    detectBaselineTs = performance.now(); // 엔진 로딩 시간이 폴백 대기에 포함되지 않도록 재설정
+    stageStartTs = performance.now(); // 엔진 로딩 시간이 폴백 대기에 포함되지 않도록 재설정
     scheduleLoop();
   } catch (error) {
     console.error(error);
