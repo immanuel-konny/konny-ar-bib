@@ -96,6 +96,7 @@ let lastFace = null; // { fit, ts }
 let mask = null; // 얼굴 가림 폴리곤
 let maskTs = 0; // 마스크 갱신 시각 (오래되면 잘못된 위치를 지우므로 무효화)
 let fusionOffset = null; // 포즈 단독 → 융합 보정량 (소스 전환 연속성)
+let appearTs = 0; // 재획득 시각 (페이드인 시작점)
 let fitRing = []; // 중앙값 필터 링버퍼
 let lastSource = null;
 let lastFitTs = 0;
@@ -125,9 +126,12 @@ let lastSuccessTs = 0; // 이번 세션 마지막 인식 성공 시각 (0 = 아�
 let hasEverDetected = false; // 이번 카메라 세션에서 인식 성공 여부
 let escalating = false; // 델리게이트 재생성 중 (감지 일시 중지)
 
-// 얼굴 엔진만 GPU에서 반복 실패하는 기기 대응: 5회 초과 시 얼굴만 CPU로 재생성
+// 얼굴 엔진만 GPU에서 실패하는 기기 대응. 예외를 던지는 경우뿐 아니라
+// "예외 없이 계속 0개를 반환하는" 무증상 실패도 감지해 CPU로 재생성한다.
+// (실기기에서 face:0/31 e0 상태가 10초 넘게 이어진 사례)
 let faceForcedCpu = false;
 let faceDowngrading = false;
+let faceMissStreak = 0;
 
 // ── 진단 (?debug=1 시 HUD 표시, window.__vtoDiag()는 항상 사용 가능) ──
 const debugEnabled = new URLSearchParams(location.search).has('debug');
@@ -269,7 +273,18 @@ function renderFrame() {
   if (!ctx) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (!renderedFit) return;
-  drawBib(ctx, withAdjust(renderedFit), state.product, state.adjust.opacity, bibImage);
+
+  // 처음 나타날 때 툭 튀어나오지 않도록 350ms 페이드인
+  const appearRamp = appearTs
+    ? Math.min(1, (performance.now() - appearTs) / 350)
+    : 1;
+  drawBib(
+    ctx,
+    withAdjust(renderedFit),
+    state.product,
+    state.adjust.opacity * appearRamp,
+    bibImage,
+  );
   if (mask) eraseMaskArea(ctx, mask);
 }
 
@@ -281,6 +296,7 @@ function resetTracking() {
   mask = null;
   maskTs = 0;
   fusionOffset = null;
+  appearTs = 0;
   fitRing = [];
   lastSource = null;
   lastFitTs = 0;
@@ -289,6 +305,7 @@ function resetTracking() {
   lastFaceTs = 0;
   lastFrameTs = 0;
   lastDetector = null;
+  faceMissStreak = 0;
 }
 
 // ── 엔진 준비 ─────────────────────────────────────────────────
@@ -305,15 +322,21 @@ async function ensureEngines() {
 // 얼굴 엔진만 GPU에서 반복 실패하면(예: image_transformation INVALID_ARGUMENT)
 // 얼굴 엔진만 CPU로 재생성한다. 포즈는 건드리지 않는다.
 function maybeDowngradeFace() {
-  if (faceForcedCpu || faceDowngrading || diag.faceErrors < 2) return;
+  if (faceForcedCpu || faceDowngrading) return;
+  // 예외 2회, 또는 포즈는 잡히는데 얼굴만 6회 연속 놓치는 무증상 실패
+  const silentFailure = faceMissStreak >= 6 && diag.poseHits > 0;
+  if (diag.faceErrors < 2 && !silentFailure) return;
   faceDowngrading = true;
-  console.warn('[ar] face landmarker: GPU 오류 반복 → CPU로 재생성');
+  console.warn(
+    `[ar] face landmarker → CPU 재생성 (errors:${diag.faceErrors} miss:${faceMissStreak})`,
+  );
   (async () => {
     try {
       const next = await createFaceLandmarker('CPU');
       faceLandmarker?.close();
       faceLandmarker = next;
       faceForcedCpu = true;
+      faceMissStreak = 0;
       diag.engine = `${diag.engine.split('+face')[0]}+face(cpu)`;
     } catch (e) {
       diag.lastError = `face-cpu: ${e?.message ?? e}`.replace(/\s+/g, ' ').slice(0, 72);
@@ -442,8 +465,14 @@ function loop() {
         if (fit) {
           lastFace = { fit, ts: now };
           diag.faceHits += 1;
+          faceMissStreak = 0;
+        } else {
+          faceMissStreak += 1;
+          maybeDowngradeFace();
         }
-        if (nextMask) {
+        // 마스크는 핏이 유효할 때만 채택한다. 같은 랜드마크라도 마스크 쪽
+        // 검증이 느슨해, 퇴화된 결과가 통과하면 턱받이 일부를 지워버린다.
+        if (fit && nextMask) {
           mask = smoothMask(mask, nextMask);
           maskTs = now;
         }
@@ -481,6 +510,7 @@ function loop() {
       lastSuccessTs = now;
       diag.lastError = null; // 정상 복구되면 이전 오류 표시를 지운다
       if (merged.ts !== lastFitTs) {
+        if (!lockedFit) appearTs = now; // 새로 잡힌 순간부터 페이드인
         // 포즈↔융합은 보정량으로 정렬되므로 링을 비우지 않는다.
         // 얼굴 단독은 기준이 달라 이때만 초기화한다.
         const familyOf = (s) => (s === 'face' ? 'face' : 'pose');

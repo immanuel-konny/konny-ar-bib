@@ -186,6 +186,17 @@ export function faceOcclusionMask(landmarks, videoWidth, videoHeight, mirrored) 
     toPixel(landmarks[i], videoWidth, videoHeight, mirrored),
   );
   if (!oval.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))) return null;
+
+  // 퇴화된 랜드마크(점들이 한곳에 뭉친 경우 등)로 만들어진 마스크는
+  // 얼굴이 아닌 엉뚱한 영역을 지워 턱받이가 잘려 보이게 만든다.
+  // 윤곽이 얼굴이라 볼 만한 크기인지 확인한다.
+  const xs = oval.map((p) => p.x);
+  const ys = oval.map((p) => p.y);
+  const spanX = Math.max(...xs) - Math.min(...xs);
+  const spanY = Math.max(...ys) - Math.min(...ys);
+  if (spanX < videoWidth * 0.06 || spanY < videoHeight * 0.05) return null;
+  if (spanX > videoWidth * 1.2 || spanY > videoHeight * 1.2) return null;
+
   return { oval, neck: [] };
 }
 

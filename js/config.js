@@ -33,7 +33,7 @@ export const FACE_OVAL = [
 ];
 
 // 핏 미세 조정 기본값 — 기본 크기 130%
-export const FIT_DEFAULTS = { scale: 1.3, x: 0, y: 0, opacity: 0.96 };
+export const FIT_DEFAULTS = { scale: 1.3, x: 0, y: 0, opacity: 1 };
 export const FIT_RANGES = {
   scale: { min: 0.68, max: 1.38, step: 0.01 },
   x: { min: -0.36, max: 0.36, step: 0.01 },
@@ -45,9 +45,10 @@ export const FIT_RANGES = {
 export const DETECT = {
   // 모바일 분석 입력 최대 변(px) — 연산량·발열 절감
   analyzeMax: 448,
-  // 감지 주기(ms): 포즈는 빠르게, 얼굴은 보조로 병행
-  poseInterval: { mobile: 52, desktop: 46 },
-  faceInterval: { mobile: 118, desktop: 92 },
+  // 감지 주기(ms): 포즈는 빠르게, 얼굴은 보조로 병행.
+  // 실기기 fps가 19~24라 프레임 간격(~45ms)보다 짧게 두어 매 프레임 감지되게 한다.
+  poseInterval: { mobile: 38, desktop: 34 },
+  faceInterval: { mobile: 100, desktop: 84 },
   // 최근 결과 유효 시간(ms)
   poseFreshMs: 760,
   faceFreshMs: 680,
@@ -56,7 +57,8 @@ export const DETECT = {
   // 미검출 시 프레임당 신뢰도 감쇠
   confidenceDecay: 0.975,
   // 좌표 튐 제거용 중앙값 필터 창 크기(프레임)
-  medianWindow: 5,
+  // 5→4: 지연을 줄이면서도 단일 튐은 계속 걸러낸다
+  medianWindow: 4,
 };
 
 // 소프트 뷰티 보정 (라이브 CSS 필터 및 저장 사진 필터 동일 값)

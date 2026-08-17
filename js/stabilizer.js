@@ -18,15 +18,16 @@ export function applyStopLock(prev, next) {
   const rotDelta = Math.abs(next.rotation - prev.rotation);
   const yawDelta = Math.abs(next.yaw - prev.yaw);
 
-  // 임계값: 위치 1.4%, 크기 2.2%, 각도 1.2° — 이하면 게인 0으로 고정 유지
-  const posMoved = posDelta >= 0.014;
-  const sizeMoved = sizeDelta >= 0.022;
+  // 임계값: 위치 1.1%, 크기 1.8%, 각도 1.2° — 이하면 게인 0으로 고정 유지.
+  // (정지 잠금은 유지하되 움직임 인식은 더 민감하게)
+  const posMoved = posDelta >= 0.011;
+  const sizeMoved = sizeDelta >= 0.018;
   const rotMoved = rotDelta >= Math.PI / 150;
 
-  const posGain = posMoved ? clamp(0.34 + posDelta * 1.45, 0.34, 0.8) : 0;
-  const sizeGain = sizeMoved ? clamp(0.25 + sizeDelta, 0.25, 0.52) : 0;
-  const rotGain = rotMoved ? clamp(0.24 + rotDelta * 2, 0.24, 0.44) : 0;
-  const yawGain = yawDelta > 0.035 ? clamp(0.24 + yawDelta * 0.55, 0.24, 0.5) : 0;
+  const posGain = posMoved ? clamp(0.45 + posDelta * 1.6, 0.45, 0.88) : 0;
+  const sizeGain = sizeMoved ? clamp(0.32 + sizeDelta, 0.32, 0.6) : 0;
+  const rotGain = rotMoved ? clamp(0.3 + rotDelta * 2, 0.3, 0.5) : 0;
+  const yawGain = yawDelta > 0.035 ? clamp(0.3 + yawDelta * 0.55, 0.3, 0.55) : 0;
 
   // 큰 오인식이 튀지 않도록 프레임당 이동량 제한 (위치 12%, 크기 10%)
   const maxMove = norm * 0.12;
@@ -54,11 +55,12 @@ export function smoothTimed(prev, target, deltaMs) {
   const speed = Math.hypot(target.x - prev.x, target.y - prev.y) / Math.max(target.width, 1);
 
 
-  // 움직임이 클수록 위치 응답 속도 상승 (17→최대 29)
-  const posAlpha = 1 - Math.exp(-(17 + Math.min(speed, 0.55) * 22) * dt);
-  const sizeAlpha = 1 - Math.exp(-12 * dt);
-  const rotAlpha = 1 - Math.exp(-10 * dt);
-  const angleAlpha = 1 - Math.exp(-8.5 * dt);
+  // 움직임이 클수록 위치 응답 속도 상승 (24→최대 42).
+  // 정지 시 떨림은 위 정지 잠금이 막으므로, 추종 속도는 높여도 안전하다.
+  const posAlpha = 1 - Math.exp(-(24 + Math.min(speed, 0.55) * 32) * dt);
+  const sizeAlpha = 1 - Math.exp(-17 * dt);
+  const rotAlpha = 1 - Math.exp(-14 * dt);
+  const angleAlpha = 1 - Math.exp(-11 * dt);
   const confAlpha = 1 - Math.exp(-14 * dt);
 
   // 목표에 충분히 가까우면 스냅해 잔떨림(오버슈트) 방지
