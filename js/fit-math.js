@@ -76,7 +76,10 @@ export function fuseFits(pose, face) {
   const width = pose.width * 0.15 + face.width * 0.85;
   return {
     x: pose.x * 0.55 + face.x * 0.45,
-    y: face.y,
+    // y: 턱 60% + 어깨 40% — 어깨선은 실제 쇄골/목 밑동 위치라서
+    // 아기(목 짧음)든 성인(목 긺)이든 원단이 목 밑동에 자동 정렬된다.
+    // 턱 100%(v12~v18)는 성인 목에서 원단이 인후를 덮는 문제를 만들었다.
+    y: face.y * 0.6 + pose.y * 0.4,
     width,
     height: width * BIB_ASPECT,
     rotation: pose.rotation * 0.7 + face.rotation * 0.3,
@@ -191,7 +194,7 @@ export function faceToFit(landmarks, videoWidth, videoHeight, mirrored) {
     // 내려간 턱만큼 앵커를 당겨 턱받이가 가슴으로 밀려나지 않게 한다.
     // 기준점 -0.35 = 중립 정면 실측값(코끝이 눈-턱 스팬의 33% 지점) —
     // 정면에서는 보정이 0이라 밀착 캘리브레이션이 변하지 않는다.
-    y: chin.y + height * (0.32 - clamp(pitch - -0.35, -0.5, 0.35) * 0.15),
+    y: chin.y + height * (0.40 - clamp(pitch - -0.35, -0.5, 0.35) * 0.15),
     width,
     height,
     rotation,

@@ -31,7 +31,7 @@ import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v18';
+const APP_VERSION = 'v19';
 
 const $ = (id) => document.getElementById(id);
 
@@ -811,7 +811,9 @@ async function startCamera(facing = state.facing) {
 
     // __vtoForceMobile: 테스트에서 모바일 경로를 강제하기 위한 훅
     isMobileSession = window.__vtoForceMobile ?? window.matchMedia(MOBILE_QUERY).matches;
-    stageIndex = isMobileSession ? 0 : 1;
+    // 데스크톱도 다운스케일 입력으로 시작 — 저사양 PC에서 원본 해상도
+    // 추론이 fps를 2까지 떨어뜨린 사례(2026-08-19). 폴백 순환은 유지된다.
+    stageIndex = 0;
     analyzeMode = FALLBACK_STAGES[stageIndex].input;
     hasEverDetected = false;
     lastSuccessTs = 0;
