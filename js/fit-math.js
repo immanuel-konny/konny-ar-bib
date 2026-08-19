@@ -34,10 +34,11 @@ export function normalizeRotation(angle) {
   while (a < -Math.PI / 2) a += Math.PI;
   const deadzone = Math.PI / 240;
   if (Math.abs(a) <= deadzone) return 0;
+  // Spark AR은 머리 롤을 거의 그대로 따라간다 — 게인 0.9, 최대 ±22.5°
   return clamp(
-    (Math.abs(a) - deadzone) * Math.sign(a) * 0.82,
-    -Math.PI / 11.25,
-    Math.PI / 11.25,
+    (Math.abs(a) - deadzone) * Math.sign(a) * 0.9,
+    -Math.PI / 8,
+    Math.PI / 8,
   );
 }
 
@@ -66,13 +67,16 @@ export function medianFit(fits) {
 // 어깨 중심은 좌우 비대칭·호흡 움직임 때문에 치우침과 흘러내림을 만든다.
 // 포즈는 몸 회전(yaw)·기울기 보조와 얼굴 소실 시 폴백으로만 쓴다.
 export function fuseFits(pose, face) {
-  const width = pose.width * 0.3 + face.width * 0.7;
+  const width = pose.width * 0.15 + face.width * 0.85;
   return {
-    x: pose.x * 0.22 + face.x * 0.78,
-    y: pose.y * 0.18 + face.y * 0.82,
+    // x: 얼굴 위주 + 몸통 정렬 보정 28% (고개만 기울여도 몸통을 벗어나지 않게)
+    x: pose.x * 0.28 + face.x * 0.72,
+    // y: 턱 기준 100% — 포즈를 섞으면 폰을 낮게 든 자세에서 어깨 앵커가
+    // y를 끌어내려 턱과 턱받이 사이 목이 노출된다 (실기기 검증)
+    y: face.y,
     width,
     height: width * BIB_ASPECT,
-    rotation: pose.rotation * 0.3 + face.rotation * 0.7,
+    rotation: pose.rotation * 0.25 + face.rotation * 0.75,
     yaw: clamp(pose.yaw * 0.4 + face.yaw * 0.6, -1, 1),
     pitch: face.pitch,
     confidence: Math.max(pose.confidence, face.confidence),
@@ -162,8 +166,9 @@ export function faceToFit(landmarks, videoWidth, videoHeight, mirrored) {
   const pitch = clamp(((nose.y - eyeY) / faceSpan - 0.5) * 2.1, -0.65, 0.65);
 
   // Spark AR 실측: 최종 턱받이 폭 ≈ 귀 간격의 1.7배.
-  // 최종 폭 = (얼굴폭×0.7 + 포즈폭×0.3) × 기본배율 1.3 이므로 역산하면 1.42.
-  const width = clamp(earDist * 1.42, videoWidth * 0.25, videoWidth * 0.76);
+  // 에뮬레이션 실측 1.91x를 1.70x로 재캘리브레이션 (융합 얼굴 비중 0.85 기준 역산).
+  // 상한 0.58w: 근접 시 화면을 다 덮는 폭주 방지 (렌더 기준 약 75%).
+  const width = clamp(earDist * 1.26, videoWidth * 0.25, videoWidth * 0.58);
   const height = width * BIB_ASPECT;
   const rotation = normalizeRotation(
     Math.atan2(eyeSecond.y - eyeFirst.y, eyeSecond.x - eyeFirst.x),
