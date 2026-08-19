@@ -66,18 +66,21 @@ export function medianFit(fits) {
 // Spark AR 실구동 참고: 턱받이는 턱 바로 아래·얼굴 중심에 붙어야 착용감이 난다.
 // 어깨 중심은 좌우 비대칭·호흡 움직임 때문에 치우침과 흘러내림을 만든다.
 // 포즈는 몸 회전(yaw)·기울기 보조와 얼굴 소실 시 폴백으로만 쓴다.
+// 해부학 모델(v12): 턱받이는 "몸통에 입는" 제품이다.
+// - x·회전·yaw(원근): 몸통(어깨) 우선 — 고개만 돌리거나 기울여도 원단은
+//   가슴 위에 남고 어깨선을 따라야 한다. 얼굴 우선이던 v10-11에서는 측면
+//   자세에서 턱받이가 몸통을 벗어나 배경까지 침범했다.
+// - y: 턱 기준 유지 (몸통 y는 폰을 낮게 든 자세에서 흘러내림 유발 — v8 검증)
+// - 얼굴 소실 시 폴백과 치우침 방지는 median+stop-lock 필터가 담당.
 export function fuseFits(pose, face) {
   const width = pose.width * 0.15 + face.width * 0.85;
   return {
-    // x: 얼굴 위주 + 몸통 정렬 보정 28% (고개만 기울여도 몸통을 벗어나지 않게)
-    x: pose.x * 0.28 + face.x * 0.72,
-    // y: 턱 기준 100% — 포즈를 섞으면 폰을 낮게 든 자세에서 어깨 앵커가
-    // y를 끌어내려 턱과 턱받이 사이 목이 노출된다 (실기기 검증)
+    x: pose.x * 0.55 + face.x * 0.45,
     y: face.y,
     width,
     height: width * BIB_ASPECT,
-    rotation: pose.rotation * 0.25 + face.rotation * 0.75,
-    yaw: clamp(pose.yaw * 0.4 + face.yaw * 0.6, -1, 1),
+    rotation: pose.rotation * 0.7 + face.rotation * 0.3,
+    yaw: clamp(pose.yaw * 0.7 + face.yaw * 0.3, -1, 1),
     pitch: face.pitch,
     confidence: Math.max(pose.confidence, face.confidence),
   };
@@ -165,10 +168,15 @@ export function faceToFit(landmarks, videoWidth, videoHeight, mirrored) {
   const faceSpan = Math.max(1, chin.y - eyeY);
   const pitch = clamp(((nose.y - eyeY) / faceSpan - 0.5) * 2.1, -0.65, 0.65);
 
-  // Spark AR 실측: 최종 턱받이 폭 ≈ 귀 간격의 1.7배.
-  // 에뮬레이션 실측 1.91x를 1.70x로 재캘리브레이션 (융합 얼굴 비중 0.85 기준 역산).
+  // Spark AR 실측: 최종 턱받이 폭 ≈ 귀 간격의 1.7배 (계수 1.26 역산).
+  // 고개를 돌리면 귀 간격이 원근으로 수축하므로 yaw² 항으로 보상해
+  // 측면에서 턱받이가 갑자기 작아지지 않게 한다.
   // 상한 0.58w: 근접 시 화면을 다 덮는 폭주 방지 (렌더 기준 약 75%).
-  const width = clamp(earDist * 1.26, videoWidth * 0.25, videoWidth * 0.58);
+  const width = clamp(
+    earDist * 1.26 * (1 + 0.3 * yaw * yaw),
+    videoWidth * 0.25,
+    videoWidth * 0.58,
+  );
   const height = width * BIB_ASPECT;
   const rotation = normalizeRotation(
     Math.atan2(eyeSecond.y - eyeFirst.y, eyeSecond.x - eyeFirst.x),
@@ -179,7 +187,11 @@ export function faceToFit(landmarks, videoWidth, videoHeight, mirrored) {
     // 목이 보이지 않도록 턱에 바짝 밀착 (Spark AR 참고 이미지 기준).
     // 기본배율 1.3 곱하면 상단이 턱선 위로 ~33% 겹치고, 겹친 부분은
     // 얼굴 가림 마스크가 지워 "턱 밑으로 들어간" 착용감이 된다.
-    y: chin.y + height * 0.32,
+    // pitch 보정: 고개를 숙이면 턱만 내려가고 목 밑동은 그대로이므로,
+    // 내려간 턱만큼 앵커를 당겨 턱받이가 가슴으로 밀려나지 않게 한다.
+    // 기준점 -0.35 = 중립 정면 실측값(코끝이 눈-턱 스팬의 33% 지점) —
+    // 정면에서는 보정이 0이라 밀착 캘리브레이션이 변하지 않는다.
+    y: chin.y + height * (0.32 - clamp(pitch - -0.35, -0.5, 0.8) * 0.3),
     width,
     height,
     rotation,

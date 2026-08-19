@@ -70,7 +70,7 @@ function drawFallbackShape(ctx, fit, product) {
 // 원단이 좁고 짧아 보이고, 좌우 날개 끝은 몸 곡면을 따라 살짝 어두워진다.
 const PERSPECTIVE_MAX = 0.24; // |yaw|=1에서 근/원측 세로 스케일 차
 const PERSPECTIVE_SLICES = 32;
-const EDGE_SHADE_BASE = 0.055; // 가장자리 기본 음영 (아주 미세)
+const EDGE_SHADE_BASE = 0.065; // 가장자리 기본 음영 (정면에서도 은은히)
 
 let bibLayerCanvas = null;
 
