@@ -176,9 +176,10 @@ export function faceToFit(landmarks, videoWidth, videoHeight, mirrored) {
 
   const fit = {
     x: earMidX + yaw * earDist * 0.04,
-    // 상단 가장자리가 턱선에 살짝(높이의 5%) 겹치게 → 겹친 부분은 얼굴 가림
-    // 마스크가 지워서 "턱 아래로 들어간" 착용감이 된다 (Spark AR 방식)
-    y: chin.y + height * 0.45,
+    // 목이 보이지 않도록 턱에 바짝 밀착 (Spark AR 참고 이미지 기준).
+    // 기본배율 1.3 곱하면 상단이 턱선 위로 ~33% 겹치고, 겹친 부분은
+    // 얼굴 가림 마스크가 지워 "턱 밑으로 들어간" 착용감이 된다.
+    y: chin.y + height * 0.32,
     width,
     height,
     rotation,

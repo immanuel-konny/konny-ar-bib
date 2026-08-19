@@ -71,34 +71,11 @@ export function drawBib(ctx, fit, product, opacity, image) {
   ctx.globalAlpha = opacity * fit.confidence;
 
   if (image?.complete && image.naturalWidth > 0) {
+    // Spark AR 레퍼런스처럼 그림자·음영 없이 플랫하고 깔끔하게 합성한다.
+    // 재질감은 HD 에셋(konny-bib-hd)에 베이크되어 있다.
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.shadowColor = 'rgba(48, 32, 24, 0.2)';
-    ctx.shadowBlur = Math.min(12, fit.width * 0.02);
-    ctx.shadowOffsetY = Math.min(8, fit.height * 0.025);
     ctx.drawImage(image, -fit.width / 2, -fit.height / 2, fit.width, fit.height);
-
-    // 원단 입체감(Spark AR 참고): 제품 비율은 그대로 두고 음영만 얹는다.
-    // source-atop이라 방금 그린 턱받이 픽셀 위에만 칠해진다.
-    ctx.shadowColor = 'transparent';
-    ctx.globalCompositeOperation = 'source-atop';
-    // ① 목선 안쪽 그림자 — 상단 중앙이 목 뒤로 들어간 느낌
-    const neckShade = ctx.createRadialGradient(
-      0, -fit.height * 0.42, fit.width * 0.04,
-      0, -fit.height * 0.42, fit.width * 0.34,
-    );
-    neckShade.addColorStop(0, 'rgba(58, 40, 28, 0.16)');
-    neckShade.addColorStop(1, 'rgba(58, 40, 28, 0)');
-    ctx.fillStyle = neckShade;
-    ctx.fillRect(-fit.width / 2, -fit.height / 2, fit.width, fit.height);
-    // ② 상하 원통 음영 — 가슴 위 곡면을 따라 아래로 갈수록 살짝 어둡게
-    const drape = ctx.createLinearGradient(0, -fit.height / 2, 0, fit.height / 2);
-    drape.addColorStop(0, 'rgba(255, 255, 255, 0.06)');
-    drape.addColorStop(0.55, 'rgba(255, 255, 255, 0)');
-    drape.addColorStop(1, 'rgba(58, 40, 28, 0.10)');
-    ctx.fillStyle = drape;
-    ctx.fillRect(-fit.width / 2, -fit.height / 2, fit.width, fit.height);
-    ctx.globalCompositeOperation = 'source-over';
   } else {
     drawFallbackShape(ctx, fit, product);
   }

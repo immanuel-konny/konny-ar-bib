@@ -10,7 +10,7 @@ export const PRODUCTS = [
     color: '#efd3d0',
     accent: '#26221f',
     url: 'https://konny.co.kr/product/detail.html?product_no=23',
-    image: './assets/konny-bib-source.webp',
+    image: './assets/konny-bib-hd.webp', // 4x 업스케일·디프린지·재질 강화 (원본: konny-bib-source)
   },
 ];
 
