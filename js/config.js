@@ -62,10 +62,11 @@ export const DETECT = {
   // 좌표 튐 제거용 중앙값 필터 창 크기(프레임)
   // 5→4: 지연을 줄이면서도 단일 튐은 계속 걸러낸다
   medianWindow: 4,
-  // 인물 세그멘테이션: 전용 320px 입력, 140ms 주기, 800ms 유효
-  segInputMax: 320,
-  segIntervalMs: 140,
-  segFreshMs: 800,
+  // 인물 세그멘테이션: CPU 추론이라 주기를 넉넉히 — 가림 용도로는 3.5Hz면 충분.
+  // (140ms 주기는 실기기 fps를 4~7까지 떨어뜨렸음)
+  segInputMax: 256,
+  segIntervalMs: 280,
+  segFreshMs: 1300,
 };
 
 // 소프트 뷰티 보정 (라이브 CSS 필터 및 저장 사진 필터 동일 값)

@@ -191,7 +191,7 @@ export function faceToFit(landmarks, videoWidth, videoHeight, mirrored) {
     // 내려간 턱만큼 앵커를 당겨 턱받이가 가슴으로 밀려나지 않게 한다.
     // 기준점 -0.35 = 중립 정면 실측값(코끝이 눈-턱 스팬의 33% 지점) —
     // 정면에서는 보정이 0이라 밀착 캘리브레이션이 변하지 않는다.
-    y: chin.y + height * (0.32 - clamp(pitch - -0.35, -0.5, 0.55) * 0.22),
+    y: chin.y + height * (0.32 - clamp(pitch - -0.35, -0.5, 0.35) * 0.15),
     width,
     height,
     rotation,

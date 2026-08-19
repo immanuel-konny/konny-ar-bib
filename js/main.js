@@ -31,7 +31,7 @@ import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v17';
+const APP_VERSION = 'v18';
 
 const $ = (id) => document.getElementById(id);
 
@@ -327,9 +327,11 @@ function renderFrame() {
     // 맨살 아기 케이스에서도 원단이 사라지지 않는다.
     if (segSkinCanvas) {
       const f = withAdjust(renderedFit);
-      const neckW = f.width * 0.78;
-      const neckTop = f.y - f.height * 0.9;
-      const neckH = f.height * 0.95; // 상반부 + 여유
+      // 인후 구역만: 폭 50%, 상단 40% — 구역이 크면 움직일 때 원단이
+      // 얇은 조각으로 침식된다 (실기기 영상 확인)
+      const neckW = f.width * 0.5;
+      const neckTop = f.y - f.height * 0.72;
+      const neckH = f.height * 0.42;
       ctx.save();
       ctx.beginPath();
       ctx.rect(f.x - neckW / 2, neckTop, neckW, neckH);
@@ -449,9 +451,10 @@ function updateSegKeep(bgProb, hairProb, bodySkinProb, faceSkinProb, w, h, ts) {
       if (a > 128) kept++;
     }
     if (bodySkinProb) {
+      // 임계 0.55~0.75: 낮은 임계는 밝은 상의까지 피부로 오인해 원단을 침식했다
       const sp = bodySkinProb[i];
-      if (sp >= 0.6) spx[i * 4 + 3] = 255;
-      else if (sp > 0.35) spx[i * 4 + 3] = Math.round(((sp - 0.35) / 0.25) * 255);
+      if (sp >= 0.75) spx[i * 4 + 3] = 255;
+      else if (sp > 0.55) spx[i * 4 + 3] = Math.round(((sp - 0.55) / 0.2) * 255);
     }
   }
   // 사람이 거의 안 잡힌 프레임(오검출)은 채택하지 않는다 — 턱받이 전체 소실 방지
