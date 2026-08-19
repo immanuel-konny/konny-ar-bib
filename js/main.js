@@ -31,7 +31,7 @@ import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v15';
+const APP_VERSION = 'v16';
 
 const $ = (id) => document.getElementById(id);
 
@@ -362,8 +362,11 @@ function loadSegmenterInBackground() {
   segLoadStarted = true;
   (async () => {
     try {
-      segmenter = await createImageSegmenter(delegatePref);
-      if (segmenter) console.info('[ar] image segmenter ready');
+      // CPU 고정: 이 기기군에서 GPU 경로의 마스크 readback이 깨진 버퍼를
+      // 반환한다(카테고리·컨피던스 모두 재현됨). 320px·140ms 주기라
+      // CPU(XNNPACK)로도 충분히 가볍고, 버그 계열을 원천 회피한다.
+      segmenter = await createImageSegmenter('CPU');
+      if (segmenter) console.info('[ar] image segmenter ready (cpu)');
     } catch {
       segmenter = null;
     }
@@ -408,10 +411,28 @@ function updateSegKeep(bgProb, hairProb, w, h, ts) {
     }
   }
   // 사람이 거의 안 잡힌 프레임(오검출)은 채택하지 않는다 — 턱받이 전체 소실 방지
-  if (kept < bgProb.length * 0.03) return;
+  if (kept < bgProb.length * 0.03) return false;
+
+  // 손상 감지: 정상 인물 마스크는 행당 경계 전환이 몇 개뿐이다.
+  // 깨진 버퍼(GPU readback 버그)는 노이즈라 전환이 수백 개 — 폐기한다.
+  let flips = 0;
+  const rows = 8;
+  for (let r = 0; r < rows; r++) {
+    const y = Math.floor(((r + 0.5) / rows) * h);
+    let prev = px[(y * w) * 4 + 3] > 128;
+    for (let x = 1; x < w; x++) {
+      const cur = px[(y * w + x) * 4 + 3] > 128;
+      if (cur !== prev) flips++;
+      prev = cur;
+    }
+  }
+  diag.segFlips = flips;
+  if (flips / rows > 16) return false; // 마스크 손상 — 채택 거부
+
   ctx.putImageData(img, 0, 0);
   segKeepTs = ts;
   diag.segKeepRatio = +(kept / bgProb.length).toFixed(3);
+  return true;
 }
 
 // 테스트 프로브: 표시 공간 정규화 좌표(0~1)의 세그 유지 알파를 반환
@@ -599,13 +620,24 @@ function loop() {
         const masks = res.confidenceMasks; // [0]=배경, [1]=머리카락, ...
         if (masks?.length) {
           const bg = masks[0];
-          updateSegKeep(
+          const ok = updateSegKeep(
             bg.getAsFloat32Array(),
             masks.length > 1 ? masks[1].getAsFloat32Array() : null,
             bg.width,
             bg.height,
             now,
           );
+          if (ok === false && (diag.segFlips ?? 0) / 8 > 16) {
+            // 손상 마스크 반복 → 기능 자체를 끈다 (원단 갉아먹힘 방지 우선)
+            diag.segErrors += 1;
+            if (diag.segErrors > 4) {
+              segDisabled = true;
+              try { segmenter.close(); } catch { /* 무시 */ }
+              segmenter = null;
+              segKeepTs = 0;
+              console.warn('[ar] segmenter disabled: corrupted masks');
+            }
+          }
         }
         res.close();
       } catch (error) {
