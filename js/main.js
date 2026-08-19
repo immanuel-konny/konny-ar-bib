@@ -31,7 +31,7 @@ import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v19';
+const APP_VERSION = 'v20';
 
 const $ = (id) => document.getElementById(id);
 
@@ -136,8 +136,8 @@ let segLoadStarted = false;
 let segDisabled = false;
 let segInputCanvas = null; // 전용 320px 입력 (감지 입력과 분리해 부하 절감)
 let segKeepCanvas = null; // alpha=유지 영역(사람∧¬머리카락∧¬얼굴피부)
-let segSkinCanvas = null; // alpha=몸피부 확률 — 목 구역에서만 원단 제거에 사용
 let segKeepTs = 0;
+let segCostAvg = 0; // CPU 추론 시간 이동평균(ms) — 저사양 기기 자동 조절용
 let lastSegRunTs = 0;
 
 // 얼굴 엔진만 GPU에서 실패하는 기기 대응. 예외를 던지는 경우뿐 아니라
@@ -186,7 +186,7 @@ function updateHud(now) {
   hudEl.textContent = [
     `${APP_VERSION} mode:${state.mode} status:${state.status} fps:${diag.fps}`,
     `engine:${diag.engine} delegate:${delegatePref} input:${analyzeMode} stage:${stageIndex}${hasEverDetected ? '*' : ''}`,
-    `video:${v?.videoWidth ?? 0}x${v?.videoHeight ?? 0} mobile:${isMobileSession} seg:${segDisabled ? 'off' : segmenter ? `on ${diag.segRuns}r e${diag.segErrors}` : '-'}`,
+    `video:${v?.videoWidth ?? 0}x${v?.videoHeight ?? 0} mobile:${isMobileSession} seg:${segDisabled ? 'off' : segmenter ? `on ${diag.segRuns}r e${diag.segErrors} ${diag.segCost ?? 0}ms` : '-'}`,
     `pose:${diag.poseHits}/${diag.poseRuns} e${diag.poseErrors} face:${diag.faceHits}/${diag.faceRuns} e${diag.faceErrors}${faceForcedCpu ? ' faceCPU' : ''}`,
     `fit:${renderedFit ? `${Math.round(renderedFit.x)},${Math.round(renderedFit.y)} w${Math.round(renderedFit.width)}` : '-'} mask:${mask ? 'y' : 'n'}`,
     diag.lastError ? `err:${String(diag.lastError).replace(/\s+/g, ' ').slice(0, 72)}` : '',
@@ -321,31 +321,6 @@ function renderFrame() {
     }
     ctx.drawImage(segKeepCanvas, 0, 0, canvas.width, canvas.height);
     ctx.restore();
-
-    // 목 구역 피부 제거: 턱받이 상반부에서 몸피부(목) 위 원단을 걷어낸다.
-    // 실제 착용처럼 인후는 항상 드러나고, 하반부(가슴)는 건드리지 않아
-    // 맨살 아기 케이스에서도 원단이 사라지지 않는다.
-    if (segSkinCanvas) {
-      const f = withAdjust(renderedFit);
-      // 인후 구역만: 폭 50%, 상단 40% — 구역이 크면 움직일 때 원단이
-      // 얇은 조각으로 침식된다 (실기기 영상 확인)
-      const neckW = f.width * 0.5;
-      const neckTop = f.y - f.height * 0.72;
-      const neckH = f.height * 0.42;
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(f.x - neckW / 2, neckTop, neckW, neckH);
-      ctx.clip();
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'high';
-      if (flip) {
-        ctx.translate(canvas.width, 0);
-        ctx.scale(-1, 1);
-      }
-      ctx.drawImage(segSkinCanvas, 0, 0, canvas.width, canvas.height);
-      ctx.restore();
-    }
   }
 }
 
@@ -369,7 +344,6 @@ function resetTracking() {
   faceMissStreak = 0;
   segKeepTs = 0;
   lastSegRunTs = 0;
-  segSkinCanvas = null;
 }
 
 // ── 엔진 준비 ─────────────────────────────────────────────────
@@ -422,23 +396,17 @@ function segSource(video) {
 // 실제 턱받이는 목을 감싸지 목 앞(인후)을 덮지 않으므로, 앵커가 조금 높아도
 // 목이 항상 드러나 착용감이 유지된다. (맨살 가슴의 아기 케이스를 위해
 // 피부 제거는 목 구역에 한정 — 전신 피부 제거 시 원단이 통째로 사라질 수 있음)
-function updateSegKeep(bgProb, hairProb, bodySkinProb, faceSkinProb, w, h, ts) {
+// 목 구역 피부 지우기는 v20에서 제거됨 — 사각 클립 경계가 원단에 직선 노치를
+// 만들었다(PC 캡처 확인). 목 노출은 v19 적응형 앵커(턱+어깨 블렌드)가 담당한다.
+function updateSegKeep(bgProb, hairProb, faceSkinProb, w, h, ts) {
   segKeepCanvas ??= document.createElement('canvas');
   if (segKeepCanvas.width !== w || segKeepCanvas.height !== h) {
     segKeepCanvas.width = w;
     segKeepCanvas.height = h;
   }
-  segSkinCanvas ??= document.createElement('canvas');
-  if (segSkinCanvas.width !== w || segSkinCanvas.height !== h) {
-    segSkinCanvas.width = w;
-    segSkinCanvas.height = h;
-  }
   const ctx = segKeepCanvas.getContext('2d');
   const img = ctx.createImageData(w, h);
   const px = img.data;
-  const skinCtx = segSkinCanvas.getContext('2d');
-  const skinImg = skinCtx.createImageData(w, h);
-  const spx = skinImg.data;
   let kept = 0;
   for (let i = 0; i < bgProb.length; i++) {
     const remove =
@@ -449,12 +417,6 @@ function updateSegKeep(bgProb, hairProb, bodySkinProb, faceSkinProb, w, h, ts) {
     if (a > 0) {
       px[i * 4 + 3] = a;
       if (a > 128) kept++;
-    }
-    if (bodySkinProb) {
-      // 임계 0.55~0.75: 낮은 임계는 밝은 상의까지 피부로 오인해 원단을 침식했다
-      const sp = bodySkinProb[i];
-      if (sp >= 0.75) spx[i * 4 + 3] = 255;
-      else if (sp > 0.55) spx[i * 4 + 3] = Math.round(((sp - 0.55) / 0.2) * 255);
     }
   }
   // 사람이 거의 안 잡힌 프레임(오검출)은 채택하지 않는다 — 턱받이 전체 소실 방지
@@ -477,7 +439,6 @@ function updateSegKeep(bgProb, hairProb, bodySkinProb, faceSkinProb, w, h, ts) {
   if (flips / rows > 16) return false; // 마스크 손상 — 채택 거부
 
   ctx.putImageData(img, 0, 0);
-  skinCtx.putImageData(skinImg, 0, 0);
   segKeepTs = ts;
   diag.segKeepRatio = +(kept / bgProb.length).toFixed(3);
   return true;
@@ -656,22 +617,35 @@ function loop() {
       }
     }
 
+    const segInterval = Math.max(DETECT.segIntervalMs, segCostAvg * 3.5);
     if (
       segmenter && !segDisabled && !faceDue &&
       state.mode === 'camera' &&
-      now - lastSegRunTs >= DETECT.segIntervalMs
+      now - lastSegRunTs >= segInterval
     ) {
       lastSegRunTs = now;
       diag.segRuns += 1;
       try {
+        const segT0 = performance.now();
         const res = segmenter.segmentForVideo(segSource(video), now);
-        const masks = res.confidenceMasks; // [0]=배경, [1]=머리카락, ...
+        const segDt = performance.now() - segT0;
+        segCostAvg = segCostAvg ? segCostAvg * 0.7 + segDt * 0.3 : segDt;
+        diag.segCost = Math.round(segCostAvg);
+        // 저사양 기기 자동 조절: 추론이 느리면 주기가 늘고(아래 segInterval),
+        // 매우 느리면 끈다. (저사양 PC에서 1회 300ms+가 fps를 2로 떨어뜨림)
+        if (segCostAvg > 300 && diag.segRuns > 3) {
+          segDisabled = true;
+          try { segmenter.close(); } catch { /* 무시 */ }
+          segmenter = null;
+          segKeepTs = 0;
+          console.warn('[ar] segmenter disabled: too slow (' + Math.round(segCostAvg) + 'ms)');
+        }
+        const masks = res?.confidenceMasks; // [0]=배경, [1]=머리카락, ...
         if (masks?.length) {
           const bg = masks[0];
           const ok = updateSegKeep(
             bg.getAsFloat32Array(),
             masks.length > 1 ? masks[1].getAsFloat32Array() : null,
-            masks.length > 2 ? masks[2].getAsFloat32Array() : null,
             masks.length > 3 ? masks[3].getAsFloat32Array() : null,
             bg.width,
             bg.height,
@@ -943,7 +917,6 @@ async function analyzePhoto(img) {
           updateSegKeep(
             bg.getAsFloat32Array(),
             masks.length > 1 ? masks[1].getAsFloat32Array() : null,
-            masks.length > 2 ? masks[2].getAsFloat32Array() : null,
             masks.length > 3 ? masks[3].getAsFloat32Array() : null,
             bg.width,
             bg.height,
