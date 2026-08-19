@@ -121,6 +121,19 @@ function renderBibLayer(image, width, height, yaw) {
   lctx.globalCompositeOperation = 'source-atop'; // 레이어의 턱받이 픽셀에만 적용
   lctx.fillStyle = grad;
   lctx.fillRect(0, 0, layerW, layerH);
+
+  // 턱 그림자: 목 구멍 바로 아래 은은한 그늘 — 실물 착용컷에서 턱이 원단에
+  // 드리우는 그림자를 재현한다 (Spark AR 레퍼런스의 핵심 입체 단서).
+  const top = (layerH - height) / 2;
+  const chinShadow = lctx.createRadialGradient(
+    layerW / 2, top + height * 0.10, width * 0.03,
+    layerW / 2, top + height * 0.10, width * 0.26,
+  );
+  chinShadow.addColorStop(0, 'rgba(45, 32, 26, 0.16)');
+  chinShadow.addColorStop(0.55, 'rgba(45, 32, 26, 0.06)');
+  chinShadow.addColorStop(1, 'rgba(45, 32, 26, 0)');
+  lctx.fillStyle = chinShadow;
+  lctx.fillRect(0, 0, layerW, layerH);
   lctx.restore();
 
   return { layer, layerH };
