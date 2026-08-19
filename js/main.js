@@ -31,7 +31,7 @@ import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v13';
+const APP_VERSION = 'v14';
 
 const $ = (id) => document.getElementById(id);
 
@@ -385,8 +385,9 @@ function segSource(video) {
   return segInputCanvas;
 }
 
-// 카테고리 마스크 → 유지 영역 캔버스 (alpha 255 = 사람이며 머리카락 아님)
-function updateSegKeep(data, w, h, ts) {
+// 컨피던스 마스크(배경·머리카락 확률) → 유지 영역 캔버스.
+// alpha 255 = 사람이며 머리카락 아님. 0.35~0.6 확률 구간은 페더링(부드러운 경계).
+function updateSegKeep(bgProb, hairProb, w, h, ts) {
   segKeepCanvas ??= document.createElement('canvas');
   if (segKeepCanvas.width !== w || segKeepCanvas.height !== h) {
     segKeepCanvas.width = w;
@@ -396,18 +397,21 @@ function updateSegKeep(data, w, h, ts) {
   const img = ctx.createImageData(w, h);
   const px = img.data;
   let kept = 0;
-  for (let i = 0; i < data.length; i++) {
-    // 0=배경, 1=머리카락 → 제거. 2피부/3얼굴/4옷/5기타 → 유지.
-    if (data[i] >= 2) {
-      px[i * 4 + 3] = 255;
-      kept++;
+  for (let i = 0; i < bgProb.length; i++) {
+    const remove = bgProb[i] + (hairProb ? hairProb[i] : 0);
+    let a = 0;
+    if (remove <= 0.35) a = 255;
+    else if (remove < 0.6) a = Math.round(((0.6 - remove) / 0.25) * 255);
+    if (a > 0) {
+      px[i * 4 + 3] = a;
+      if (a > 128) kept++;
     }
   }
   // 사람이 거의 안 잡힌 프레임(오검출)은 채택하지 않는다 — 턱받이 전체 소실 방지
-  if (kept < data.length * 0.03) return;
+  if (kept < bgProb.length * 0.03) return;
   ctx.putImageData(img, 0, 0);
   segKeepTs = ts;
-  diag.segKeepRatio = +(kept / data.length).toFixed(3);
+  diag.segKeepRatio = +(kept / bgProb.length).toFixed(3);
 }
 
 // 테스트 프로브: 표시 공간 정규화 좌표(0~1)의 세그 유지 알파를 반환
@@ -592,8 +596,17 @@ function loop() {
       diag.segRuns += 1;
       try {
         const res = segmenter.segmentForVideo(segSource(video), now);
-        const m = res.categoryMask;
-        if (m) updateSegKeep(m.getAsUint8Array(), m.width, m.height, now);
+        const masks = res.confidenceMasks; // [0]=배경, [1]=머리카락, ...
+        if (masks?.length) {
+          const bg = masks[0];
+          updateSegKeep(
+            bg.getAsFloat32Array(),
+            masks.length > 1 ? masks[1].getAsFloat32Array() : null,
+            bg.width,
+            bg.height,
+            now,
+          );
+        }
         res.close();
       } catch (error) {
         diag.segErrors += 1;
@@ -840,9 +853,16 @@ async function analyzePhoto(img) {
       try {
         await segmenter.setOptions({ runningMode: 'IMAGE' });
         const segRes = segmenter.segment(img);
-        const m = segRes.categoryMask;
-        if (m) {
-          updateSegKeep(m.getAsUint8Array(), m.width, m.height, Number.POSITIVE_INFINITY);
+        const masks = segRes.confidenceMasks;
+        if (masks?.length) {
+          const bg = masks[0];
+          updateSegKeep(
+            bg.getAsFloat32Array(),
+            masks.length > 1 ? masks[1].getAsFloat32Array() : null,
+            bg.width,
+            bg.height,
+            Number.POSITIVE_INFINITY,
+          );
         }
         segRes.close();
       } catch {

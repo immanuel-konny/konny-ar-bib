@@ -74,8 +74,11 @@ export async function createImageSegmenter(preferredDelegate = 'GPU') {
   const options = (delegate) => ({
     baseOptions: { modelAssetPath: SEG_MODEL_URL, delegate },
     runningMode: 'VIDEO',
-    outputCategoryMask: true,
-    outputConfidenceMasks: false,
+    // 카테고리 마스크는 일부 기기 GPU에서 깨진 버퍼를 반환한다(실기기에서
+    // 블록 노이즈로 확인됨). float 컨피던스 마스크는 델리게이트와 무관하게
+    // 형식이 보장되므로 이를 사용한다.
+    outputCategoryMask: false,
+    outputConfidenceMasks: true,
   });
   if (preferredDelegate === 'GPU') {
     try {
