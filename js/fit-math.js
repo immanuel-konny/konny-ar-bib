@@ -61,16 +61,19 @@ export function medianFit(fits) {
   };
 }
 
-// 포즈 핏 + 얼굴 핏 융합 — 위치는 포즈(어깨) 우선, 세로·yaw는 얼굴 우선
+// 포즈 핏 + 얼굴 핏 융합 — 얼굴(턱) 기준 우선.
+// Spark AR 실구동 참고: 턱받이는 턱 바로 아래·얼굴 중심에 붙어야 착용감이 난다.
+// 어깨 중심은 좌우 비대칭·호흡 움직임 때문에 치우침과 흘러내림을 만든다.
+// 포즈는 몸 회전(yaw)·기울기 보조와 얼굴 소실 시 폴백으로만 쓴다.
 export function fuseFits(pose, face) {
-  const width = pose.width * 0.58 + face.width * 0.42;
+  const width = pose.width * 0.3 + face.width * 0.7;
   return {
-    x: pose.x * 0.62 + face.x * 0.38,
-    y: pose.y * 0.42 + face.y * 0.58,
+    x: pose.x * 0.22 + face.x * 0.78,
+    y: pose.y * 0.18 + face.y * 0.82,
     width,
     height: width * BIB_ASPECT,
-    rotation: pose.rotation * 0.58 + face.rotation * 0.42,
-    yaw: clamp(pose.yaw * 0.3 + face.yaw * 0.7, -1, 1),
+    rotation: pose.rotation * 0.3 + face.rotation * 0.7,
+    yaw: clamp(pose.yaw * 0.4 + face.yaw * 0.6, -1, 1),
     pitch: face.pitch,
     confidence: Math.max(pose.confidence, face.confidence),
   };
@@ -158,7 +161,9 @@ export function faceToFit(landmarks, videoWidth, videoHeight, mirrored) {
   const faceSpan = Math.max(1, chin.y - eyeY);
   const pitch = clamp(((nose.y - eyeY) / faceSpan - 0.5) * 2.1, -0.65, 0.65);
 
-  const width = clamp(earDist * 1.38, videoWidth * 0.25, videoWidth * 0.74);
+  // Spark AR 실측: 최종 턱받이 폭 ≈ 귀 간격의 1.7배.
+  // 최종 폭 = (얼굴폭×0.7 + 포즈폭×0.3) × 기본배율 1.3 이므로 역산하면 1.42.
+  const width = clamp(earDist * 1.42, videoWidth * 0.25, videoWidth * 0.76);
   const height = width * BIB_ASPECT;
   const rotation = normalizeRotation(
     Math.atan2(eyeSecond.y - eyeFirst.y, eyeSecond.x - eyeFirst.x),
@@ -166,7 +171,9 @@ export function faceToFit(landmarks, videoWidth, videoHeight, mirrored) {
 
   const fit = {
     x: earMidX + yaw * earDist * 0.04,
-    y: chin.y + height * 0.34,
+    // 상단 가장자리가 턱선에 살짝(높이의 5%) 겹치게 → 겹친 부분은 얼굴 가림
+    // 마스크가 지워서 "턱 아래로 들어간" 착용감이 된다 (Spark AR 방식)
+    y: chin.y + height * 0.45,
     width,
     height,
     rotation,

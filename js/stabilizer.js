@@ -18,10 +18,11 @@ export function applyStopLock(prev, next) {
   const rotDelta = Math.abs(next.rotation - prev.rotation);
   const yawDelta = Math.abs(next.yaw - prev.yaw);
 
-  // 임계값: 위치 1.1%, 크기 1.8%, 각도 1.2° — 이하면 게인 0으로 고정 유지.
-  // (정지 잠금은 유지하되 움직임 인식은 더 민감하게)
-  const posMoved = posDelta >= 0.011;
-  const sizeMoved = sizeDelta >= 0.018;
+  // 임계값: 위치 1.3%, 크기 2.8%, 각도 1.2° — 이하면 게인 0으로 고정 유지.
+  // 크기는 인식 노이즈가 커서(실기기 ±5%) 위치보다 훨씬 둔감하게 잠근다 —
+  // 정지 상태에서 "숨쉬듯 커졌다 작아지는" 느낌 제거.
+  const posMoved = posDelta >= 0.013;
+  const sizeMoved = sizeDelta >= 0.028;
   const rotMoved = rotDelta >= Math.PI / 150;
 
   const posGain = posMoved ? clamp(0.45 + posDelta * 1.6, 0.45, 0.88) : 0;
