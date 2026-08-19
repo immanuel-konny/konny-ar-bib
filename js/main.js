@@ -25,14 +25,13 @@ import { applyStopLock, smoothTimed } from './stabilizer.js';
 import {
   drawBib,
   eraseMaskArea,
-  compositeSkinOver,
   drawBeautyLight,
 } from './renderer.js';
-import { createPoseLandmarker, createFaceLandmarker } from './engine.js';
+import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v12';
+const APP_VERSION = 'v13';
 
 const $ = (id) => document.getElementById(id);
 
@@ -130,6 +129,16 @@ let lastSuccessTs = 0; // 이번 세션 마지막 인식 성공 시각 (0 = 아�
 let hasEverDetected = false; // 이번 카메라 세션에서 인식 성공 여부
 let escalating = false; // 델리게이트 재생성 중 (감지 일시 중지)
 
+// ── 인물 세그멘테이션 상태 (배경·머리카락 정밀 가림) ─────────
+// 로딩은 카메라 시작 후 백그라운드로 진행 — 준비 전/실패 시엔 v12 동작 유지.
+let segmenter = null;
+let segLoadStarted = false;
+let segDisabled = false;
+let segInputCanvas = null; // 전용 320px 입력 (감지 입력과 분리해 부하 절감)
+let segKeepCanvas = null; // alpha=유지 영역(사람∧¬머리카락)
+let segKeepTs = 0;
+let lastSegRunTs = 0;
+
 // 얼굴 엔진만 GPU에서 실패하는 기기 대응. 예외를 던지는 경우뿐 아니라
 // "예외 없이 계속 0개를 반환하는" 무증상 실패도 감지해 CPU로 재생성한다.
 // (실기기에서 face:0/31 e0 상태가 10초 넘게 이어진 사례)
@@ -147,6 +156,8 @@ const diag = {
   faceRuns: 0,
   faceHits: 0,
   faceErrors: 0,
+  segRuns: 0,
+  segErrors: 0,
   lastError: null,
   fps: 0,
 };
@@ -174,7 +185,7 @@ function updateHud(now) {
   hudEl.textContent = [
     `${APP_VERSION} mode:${state.mode} status:${state.status} fps:${diag.fps}`,
     `engine:${diag.engine} delegate:${delegatePref} input:${analyzeMode} stage:${stageIndex}${hasEverDetected ? '*' : ''}`,
-    `video:${v?.videoWidth ?? 0}x${v?.videoHeight ?? 0} mobile:${isMobileSession}`,
+    `video:${v?.videoWidth ?? 0}x${v?.videoHeight ?? 0} mobile:${isMobileSession} seg:${segDisabled ? 'off' : segmenter ? `on ${diag.segRuns}r e${diag.segErrors}` : '-'}`,
     `pose:${diag.poseHits}/${diag.poseRuns} e${diag.poseErrors} face:${diag.faceHits}/${diag.faceRuns} e${diag.faceErrors}${faceForcedCpu ? ' faceCPU' : ''}`,
     `fit:${renderedFit ? `${Math.round(renderedFit.x)},${Math.round(renderedFit.y)} w${Math.round(renderedFit.width)}` : '-'} mask:${mask ? 'y' : 'n'}`,
     diag.lastError ? `err:${String(diag.lastError).replace(/\s+/g, ' ').slice(0, 72)}` : '',
@@ -291,6 +302,24 @@ function renderFrame() {
     bibImage,
   );
   if (mask) eraseMaskArea(ctx, mask);
+
+  // 인물 세그멘테이션 클리핑: 몸 실루엣 밖(배경)과 머리카락 위의 턱받이 픽셀 제거.
+  // destination-in은 캔버스의 기존 픽셀(=턱받이만)에만 작용한다.
+  // 전면 카메라 표시 공간은 좌우 반전이므로 마스크도 반전해 맞춘다.
+  const segFresh =
+    segKeepCanvas && segKeepTs && performance.now() - segKeepTs < DETECT.segFreshMs;
+  if (segFresh) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-in';
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    if (state.mode === 'camera' && state.mirrored) {
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(segKeepCanvas, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
+  }
 }
 
 function resetTracking() {
@@ -311,6 +340,8 @@ function resetTracking() {
   lastFrameTs = 0;
   lastDetector = null;
   faceMissStreak = 0;
+  segKeepTs = 0;
+  lastSegRunTs = 0;
 }
 
 // ── 엔진 준비 ─────────────────────────────────────────────────
@@ -321,8 +352,72 @@ async function ensureEngines() {
   poseLandmarker = await createPoseLandmarker(delegatePref);
   faceLandmarker = await createFaceLandmarker(delegatePref);
   diag.engine = faceLandmarker ? 'pose+face' : 'pose-only';
+  loadSegmenterInBackground(); // 시작을 막지 않도록 비동기 (모델 ~16MB)
   return poseLandmarker;
 }
+
+// 세그멘터 백그라운드 로딩 — 모델(~16MB)이 커서 시작을 막지 않는다
+function loadSegmenterInBackground() {
+  if (segmenter || segLoadStarted || segDisabled) return;
+  segLoadStarted = true;
+  (async () => {
+    try {
+      segmenter = await createImageSegmenter(delegatePref);
+      if (segmenter) console.info('[ar] image segmenter ready');
+    } catch {
+      segmenter = null;
+    }
+  })();
+}
+
+// 세그멘테이션 전용 축소 입력 (긴 변 segInputMax, 짝수 치수)
+function segSource(video) {
+  const longest = Math.max(video.videoWidth, video.videoHeight);
+  const ratio = Math.min(1, DETECT.segInputMax / Math.max(longest, 1));
+  const w = Math.max(2, Math.round(video.videoWidth * ratio) & ~1);
+  const h = Math.max(2, Math.round(video.videoHeight * ratio) & ~1);
+  segInputCanvas ??= document.createElement('canvas');
+  if (segInputCanvas.width !== w || segInputCanvas.height !== h) {
+    segInputCanvas.width = w;
+    segInputCanvas.height = h;
+  }
+  segInputCanvas.getContext('2d', { alpha: false })?.drawImage(video, 0, 0, w, h);
+  return segInputCanvas;
+}
+
+// 카테고리 마스크 → 유지 영역 캔버스 (alpha 255 = 사람이며 머리카락 아님)
+function updateSegKeep(data, w, h, ts) {
+  segKeepCanvas ??= document.createElement('canvas');
+  if (segKeepCanvas.width !== w || segKeepCanvas.height !== h) {
+    segKeepCanvas.width = w;
+    segKeepCanvas.height = h;
+  }
+  const ctx = segKeepCanvas.getContext('2d');
+  const img = ctx.createImageData(w, h);
+  const px = img.data;
+  let kept = 0;
+  for (let i = 0; i < data.length; i++) {
+    // 0=배경, 1=머리카락 → 제거. 2피부/3얼굴/4옷/5기타 → 유지.
+    if (data[i] >= 2) {
+      px[i * 4 + 3] = 255;
+      kept++;
+    }
+  }
+  // 사람이 거의 안 잡힌 프레임(오검출)은 채택하지 않는다 — 턱받이 전체 소실 방지
+  if (kept < data.length * 0.03) return;
+  ctx.putImageData(img, 0, 0);
+  segKeepTs = ts;
+  diag.segKeepRatio = +(kept / data.length).toFixed(3);
+}
+
+// 테스트 프로브: 표시 공간 정규화 좌표(0~1)의 세그 유지 알파를 반환
+window.__vtoSegAt = (nx, ny) => {
+  if (!segKeepCanvas || !segKeepTs) return null;
+  const sx = state.mode === 'camera' && state.mirrored ? 1 - nx : nx;
+  const x = Math.min(segKeepCanvas.width - 1, Math.max(0, Math.round(sx * segKeepCanvas.width)));
+  const y = Math.min(segKeepCanvas.height - 1, Math.max(0, Math.round(ny * segKeepCanvas.height)));
+  return segKeepCanvas.getContext('2d').getImageData(x, y, 1, 1).data[3];
+};
 
 // 얼굴 엔진만 GPU에서 반복 실패하면(예: image_transformation INVALID_ARGUMENT)
 // 얼굴 엔진만 CPU로 재생성한다. 포즈는 건드리지 않는다.
@@ -488,6 +583,30 @@ function loop() {
       }
     }
 
+    if (
+      segmenter && !segDisabled && !faceDue &&
+      state.mode === 'camera' &&
+      now - lastSegRunTs >= DETECT.segIntervalMs
+    ) {
+      lastSegRunTs = now;
+      diag.segRuns += 1;
+      try {
+        const res = segmenter.segmentForVideo(segSource(video), now);
+        const m = res.categoryMask;
+        if (m) updateSegKeep(m.getAsUint8Array(), m.width, m.height, now);
+        res.close();
+      } catch (error) {
+        diag.segErrors += 1;
+        diag.lastError = `seg: ${error?.message ?? error}`.replace(/\s+/g, ' ').slice(0, 72);
+        if (diag.segErrors > 4) {
+          // 반복 실패 기기: 기능만 끄고 기본 동작 유지
+          segDisabled = true;
+          try { segmenter.close(); } catch { /* 무시 */ }
+          segmenter = null;
+        }
+      }
+    }
+
     const freshPose = lastPose && now - lastPose.ts < DETECT.poseFreshMs ? lastPose : null;
     const freshFace = lastFace && now - lastFace.ts < DETECT.faceFreshMs ? lastFace : null;
 
@@ -634,6 +753,7 @@ async function startCamera(facing = state.facing) {
 
     await poseLandmarker.setOptions({ runningMode: 'VIDEO' });
     await faceLandmarker?.setOptions({ runningMode: 'VIDEO' });
+    await segmenter?.setOptions({ runningMode: 'VIDEO' });
 
     stream = mediaStream;
     state.facing = facing;
@@ -716,6 +836,20 @@ async function analyzePhoto(img) {
       maskTs = Number.POSITIVE_INFINITY; // 정지 사진은 만료되지 않음
     }
 
+    if (segmenter && !segDisabled) {
+      try {
+        await segmenter.setOptions({ runningMode: 'IMAGE' });
+        const segRes = segmenter.segment(img);
+        const m = segRes.categoryMask;
+        if (m) {
+          updateSegKeep(m.getAsUint8Array(), m.width, m.height, Number.POSITIVE_INFINITY);
+        }
+        segRes.close();
+      } catch {
+        /* 사진 세그 실패 시 기능만 생략 */
+      }
+    }
+
     const merged = poseFit && faceFit ? fuseFits(poseFit, faceFit) : poseFit ?? faceFit;
     const fallbackWidth = img.naturalWidth * 0.48;
     renderedFit = merged ?? {
@@ -780,14 +914,9 @@ function capture() {
     ctx.drawImage(els.photoView, 0, 0, output.width, output.height);
   }
 
-  // 가림 처리용 원본 프레임 사본 (뷰티 보정 적용된 상태)
-  const cleanFrame = document.createElement('canvas');
-  cleanFrame.width = output.width;
-  cleanFrame.height = output.height;
-  cleanFrame.getContext('2d')?.drawImage(output, 0, 0);
-
-  drawBib(ctx, withAdjust(fit), state.product, state.adjust.opacity, bibImage);
-  if (mask) compositeSkinOver(ctx, cleanFrame, mask);
+  // WYSIWYG: 화면에 보이는 라이브 캔버스(턱받이+얼굴가림+세그 클리핑+원근이
+  // 모두 반영된 상태)를 그대로 합성한다. 저장본과 화면이 항상 일치한다.
+  ctx.drawImage(els.canvas, 0, 0, output.width, output.height);
 
   output.toBlob(
     (blob) => {
@@ -899,6 +1028,7 @@ function init() {
     stopStream();
     poseLandmarker?.close();
     faceLandmarker?.close();
+    segmenter?.close();
   });
 }
 

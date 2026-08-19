@@ -1,6 +1,6 @@
 // MediaPipe Tasks Vision 로딩 — GPU 우선, 실패 시 CPU 폴백 (v15 동일)
 
-import { POSE_MODEL_URL, FACE_MODEL_URL, WASM_BASE_URL, VISION_BUNDLE_URL } from './config.js';
+import { POSE_MODEL_URL, FACE_MODEL_URL, SEG_MODEL_URL, WASM_BASE_URL, VISION_BUNDLE_URL } from './config.js';
 
 let visionModulePromise = null;
 let filesetPromise = null;
@@ -63,6 +63,30 @@ export async function createFaceLandmarker(preferredDelegate = 'GPU') {
     return await vision.FaceLandmarker.createFromOptions(fileset, options('CPU'));
   } catch {
     // 얼굴 추적 실패 시 포즈 단독으로도 동작 가능
+    return null;
+  }
+}
+
+// 인물 세그멘터 — 배경·머리카락 정밀 가림용. 실패하면 null (기능만 비활성).
+export async function createImageSegmenter(preferredDelegate = 'GPU') {
+  const vision = await loadVisionModule();
+  const fileset = await loadFileset();
+  const options = (delegate) => ({
+    baseOptions: { modelAssetPath: SEG_MODEL_URL, delegate },
+    runningMode: 'VIDEO',
+    outputCategoryMask: true,
+    outputConfidenceMasks: false,
+  });
+  if (preferredDelegate === 'GPU') {
+    try {
+      return await vision.ImageSegmenter.createFromOptions(fileset, options('GPU'));
+    } catch {
+      /* CPU 폴백으로 진행 */
+    }
+  }
+  try {
+    return await vision.ImageSegmenter.createFromOptions(fileset, options('CPU'));
+  } catch {
     return null;
   }
 }
