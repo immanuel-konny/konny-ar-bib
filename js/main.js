@@ -30,6 +30,10 @@ import {
 } from './renderer.js';
 import { createPoseLandmarker, createFaceLandmarker } from './engine.js';
 
+// 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
+// ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
+const APP_VERSION = 'v11';
+
 const $ = (id) => document.getElementById(id);
 
 const els = {
@@ -168,7 +172,7 @@ function updateHud(now) {
   }
   const v = els.video;
   hudEl.textContent = [
-    `mode:${state.mode} status:${state.status} fps:${diag.fps}`,
+    `${APP_VERSION} mode:${state.mode} status:${state.status} fps:${diag.fps}`,
     `engine:${diag.engine} delegate:${delegatePref} input:${analyzeMode} stage:${stageIndex}${hasEverDetected ? '*' : ''}`,
     `video:${v?.videoWidth ?? 0}x${v?.videoHeight ?? 0} mobile:${isMobileSession}`,
     `pose:${diag.poseHits}/${diag.poseRuns} e${diag.poseErrors} face:${diag.faceHits}/${diag.faceRuns} e${diag.faceErrors}${faceForcedCpu ? ' faceCPU' : ''}`,
@@ -178,6 +182,7 @@ function updateHud(now) {
 }
 
 window.__vtoDiag = () => ({
+  version: APP_VERSION,
   ...diag,
   mode: state.mode,
   status: state.status,
@@ -842,6 +847,7 @@ function toggleBeauty() {
 
 // ── 초기화 ────────────────────────────────────────────────────
 function init() {
+  console.info(`[ar] KONNY BIB AR TRY-ON ${APP_VERSION}`);
   // 제품 이미지 프리로드
   const img = new Image();
   img.src = state.product.image;
