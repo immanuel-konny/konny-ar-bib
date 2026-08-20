@@ -76,16 +76,16 @@ const PERSPECTIVE_SLICES = 32;
 const COLLAR_CURVE = 0.12; // 날개 끝이 올라가는 높이 (턱받이 높이 비율)
 const EDGE_SHADE_BASE = 0.04; // 가장자리 기본 음영 — 화사한 인상을 위해 얕게
 
-let bibLayerCanvas = null;
+const bibLayerCache = {}; // 앞판/뒤판이 각자의 오프스크린을 사용
 
-function renderBibLayer(image, width, height, yaw) {
+function renderBibLayer(image, width, height, yaw, cacheKey = 'front') {
   const p = Math.max(-1, Math.min(1, yaw || 0)) * PERSPECTIVE_MAX;
   const pad = Math.ceil(height * (Math.abs(p) / 2 + COLLAR_CURVE)) + 2;
   const layerW = Math.max(2, Math.ceil(width));
   const layerH = Math.max(2, Math.ceil(height + pad * 2));
 
-  bibLayerCanvas ??= document.createElement('canvas');
-  const layer = bibLayerCanvas;
+  bibLayerCache[cacheKey] ??= document.createElement('canvas');
+  const layer = bibLayerCache[cacheKey];
   if (layer.width !== layerW || layer.height !== layerH) {
     layer.width = layerW;
     layer.height = layerH;
@@ -96,7 +96,9 @@ function renderBibLayer(image, width, height, yaw) {
   lctx.imageSmoothingQuality = 'high';
 
   const n = PERSPECTIVE_SLICES;
-  const srcSliceW = image.naturalWidth / n;
+  const srcW = image.naturalWidth ?? image.width;
+  const srcH = image.naturalHeight ?? image.height;
+  const srcSliceW = srcW / n;
   let x = 0;
   for (let i = 0; i < n; i++) {
     const t = (i + 0.5) / n - 0.5;
@@ -106,7 +108,7 @@ function renderBibLayer(image, width, height, yaw) {
     const arc = -COLLAR_CURVE * height * (4 * t * t); // 가장자리에서 위로
     lctx.drawImage(
       image,
-      i * srcSliceW, 0, srcSliceW, image.naturalHeight,
+      i * srcSliceW, 0, srcSliceW, srcH,
       x, (layerH - dh) / 2 + arc, dw + 0.6, dh, // +0.6px: 심 갭 방지
     );
     x += dw;
@@ -148,9 +150,13 @@ function renderBibLayer(image, width, height, yaw) {
 // 실물 롤링빕은 목 뒤까지 360° 연결된다(착용컷 뒷모습 확인). 뒤판을 먼저
 // 그리고 '사람 영역'을 뚫으면, 어깨 위·목 옆 배경에만 뒤판이 남아
 // 몸이 칼라 앞뒤 사이에 낀 실물 구조가 재현된다.
-const BACK_SCALE = 0.96; // 뒤판은 약간 멀리 = 약간 작게
-const BACK_LIFT = 0.24; // 앞판 대비 위로 (목 뒤에서 넘어오는 높이, 높이 비율)
-const BACK_DIM = 0.13; // 뒤판은 그늘져 살짝 어둡게
+// 기하 역산: 정면에서 뒤판은 앞판 상단 위로 '얇은 슬리버'만 비친다.
+// peek = LIFT + SCALE/2 - 0.5 = 0.14 + 0.44 - 0.5 = 0.08 (높이의 8%, ~18px)
+// v27의 0.96/0.24는 거대한 판이 사람 뒤에 떠 보였음 — 과장 금지.
+const BACK_SCALE = 0.88; // 뒤판은 멀리 = 확실히 작게 (앞판 안쪽에 숨음)
+const BACK_LIFT = 0.14; // 상단이 앞판보다 8%만 위로 비치는 리프트
+const BACK_DIM = 0.18; // 목 뒤 그늘
+const BACK_PARALLAX = 0.05; // 몸 회전 시 먼 쪽 뒤판이 더 드러나는 시차
 
 let backLayerCanvas = null;
 let backLayerSrc = null;
@@ -171,13 +177,19 @@ export function drawBibBack(ctx, fit, image) {
   }
   const w = fit.width * BACK_SCALE;
   const h = fit.height * BACK_SCALE;
+  // 앞판과 같은 아치·원근 파이프라인을 태워야 날개 구간에서도
+  // 뒤판 상단이 앞판 위로 균일하게 8% 비친다 (아치 불일치 시 완전히 가려짐)
+  const { layer, layerH } = renderBibLayer(backLayerCanvas, w, h, fit.yaw, 'back');
   ctx.save();
-  ctx.translate(fit.x, fit.y - fit.height * BACK_LIFT);
+  // 시차: 몸이 돌면 뒤판은 반대쪽으로 밀려 먼 쪽 원단이 더 보인다
+  ctx.translate(
+    fit.x + (fit.yaw || 0) * fit.width * BACK_PARALLAX,
+    fit.y - fit.height * BACK_LIFT,
+  );
   ctx.rotate(fit.rotation);
-  ctx.globalAlpha = ctx.globalAlpha; // 호출부 알파 유지
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(backLayerCanvas, -w / 2, -h / 2, w, h);
+  ctx.drawImage(layer, -w / 2, -layerH / 2, w, layerH);
   ctx.restore();
 }
 

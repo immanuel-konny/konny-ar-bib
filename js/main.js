@@ -8,7 +8,7 @@ import {
   DETECT,
   MOBILE_QUERY,
   STATUS_MESSAGES,
-} from './config.js';
+} from './config.js?v29';
 import {
   poseToFit,
   faceToFit,
@@ -20,20 +20,20 @@ import {
   isPlausibleFit,
   applyFusionOffset,
   measureFusionOffset,
-} from './fit-math.js';
-import { applyStopLock, smoothTimed } from './stabilizer.js';
+} from './fit-math.js?v29';
+import { applyStopLock, smoothTimed } from './stabilizer.js?v29';
 import {
   drawBib,
   drawBibBack,
   eraseMaskArea,
   drawBeautyLight,
-} from './renderer.js';
-import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js';
-import { SEG_MODEL_LITE_URL } from './config.js';
+} from './renderer.js?v29';
+import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v29';
+import { SEG_MODEL_LITE_URL } from './config.js?v29';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v27';
+const APP_VERSION = 'v29';
 
 const $ = (id) => document.getElementById(id);
 
@@ -324,6 +324,7 @@ function renderFrame() {
   const segFresh =
     segKeepCanvas && segKeepTs && performance.now() - segKeepTs < DETECT.segFreshMs;
   if (segFresh) {
+    diag.backDraws = (diag.backDraws ?? 0) + 1;
     ctx.globalAlpha = state.adjust.opacity * appearRamp;
     drawBibBack(ctx, drawFit, bibImage);
     ctx.globalAlpha = 1;
