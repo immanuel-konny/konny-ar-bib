@@ -32,7 +32,7 @@ import { SEG_MODEL_LITE_URL } from './config.js';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v21';
+const APP_VERSION = 'v22';
 
 const $ = (id) => document.getElementById(id);
 
@@ -414,7 +414,7 @@ function segSource(video) {
 // 피부 제거는 목 구역에 한정 — 전신 피부 제거 시 원단이 통째로 사라질 수 있음)
 // 목 구역 피부 지우기는 v20에서 제거됨 — 사각 클립 경계가 원단에 직선 노치를
 // 만들었다(PC 캡처 확인). 목 노출은 v19 적응형 앵커(턱+어깨 블렌드)가 담당한다.
-function updateSegKeep(bgProb, hairProb, w, h, ts) {
+function updateSegKeep(bgProb, hairProb, invert, w, h, ts) {
   segKeepCanvas ??= document.createElement('canvas');
   if (segKeepCanvas.width !== w || segKeepCanvas.height !== h) {
     segKeepCanvas.width = w;
@@ -427,7 +427,8 @@ function updateSegKeep(bgProb, hairProb, w, h, ts) {
   for (let i = 0; i < bgProb.length; i++) {
     // 배경+머리카락만 제거. 얼굴피부 채널은 맨살 목·가슴을 오분류해
     // 원단을 침식했다(2026-08-20 영상) — 얼굴은 랜드마크 오벌 마스크가 담당.
-    const remove = bgProb[i] + (hairProb ? hairProb[i] : 0);
+    // invert: 바이너리 selfie 모델은 마스크 1장이 '사람(전경)' 확률이므로 반전.
+    const remove = (invert ? 1 - bgProb[i] : bgProb[i]) + (hairProb ? hairProb[i] : 0);
     let a = 0;
     if (remove <= 0.35) a = 255;
     else if (remove < 0.6) a = Math.round(((0.6 - remove) / 0.25) * 255);
@@ -678,12 +679,15 @@ function loop() {
           segKeepTs = 0;
           console.warn('[ar] segmenter disabled: too slow (' + Math.round(segCostAvg) + 'ms)');
         }
-        const masks = res?.confidenceMasks; // [0]=배경, [1]=머리카락, ...
+        // 멀티클래스: [0]=배경, [1]=머리카락. 바이너리(lite): 마스크 1장 = 사람 확률.
+        const masks = res?.confidenceMasks;
         if (masks?.length) {
           const bg = masks[0];
+          const invert = masks.length === 1;
           const ok = updateSegKeep(
             bg.getAsFloat32Array(),
-            segTier === 'multi' && masks.length > 1 ? masks[1].getAsFloat32Array() : null,
+            !invert && segTier === 'multi' && masks.length > 1 ? masks[1].getAsFloat32Array() : null,
+            invert,
             bg.width,
             bg.height,
             now,
@@ -953,7 +957,8 @@ async function analyzePhoto(img) {
           const bg = masks[0];
           updateSegKeep(
             bg.getAsFloat32Array(),
-            segTier === 'multi' && masks.length > 1 ? masks[1].getAsFloat32Array() : null,
+            masks.length > 1 && segTier === 'multi' ? masks[1].getAsFloat32Array() : null,
+            masks.length === 1,
             bg.width,
             bg.height,
             Number.POSITIVE_INFINITY,
