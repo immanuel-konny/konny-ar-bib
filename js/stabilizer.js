@@ -2,8 +2,8 @@
 // 1단계 applyStopLock: 정지 잠금 — 임계값 이하 변화는 무시, 넘을 때만 적응형 게인으로 이동
 // 2단계 smoothTimed: 시간 기반 지수 보간 — 렌더 프레임마다 부드럽게 목표를 따라감
 
-import { clamp } from './fit-math.js?v41';
-import { BIB_ASPECT } from './config.js?v41';
+import { clamp } from './fit-math.js?v42';
+import { BIB_ASPECT } from './config.js?v42';
 
 export function applyStopLock(prev, next) {
   if (!prev) return next;

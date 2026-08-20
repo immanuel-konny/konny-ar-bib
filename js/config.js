@@ -38,8 +38,8 @@ export const FACE_OVAL = [
   162, 21, 54, 103, 67, 109,
 ];
 
-// 핏 미세 조정 기본값 — 기본 크기 130%
-export const FIT_DEFAULTS = { scale: 1.3, x: 0, y: 0, opacity: 1 };
+// 핏 미세 조정 기본값 — 기본 크기 130%, 상하 위 15 (사용자 확정 2026-08-21)
+export const FIT_DEFAULTS = { scale: 1.3, x: 0, y: -0.15, opacity: 1 };
 export const FIT_RANGES = {
   scale: { min: 0.68, max: 1.5, step: 0.01 },
   x: { min: -0.36, max: 0.36, step: 0.01 },
