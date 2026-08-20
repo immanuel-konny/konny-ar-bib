@@ -41,7 +41,7 @@ export const FACE_OVAL = [
 // 핏 미세 조정 기본값 — 기본 크기 130%
 export const FIT_DEFAULTS = { scale: 1.3, x: 0, y: 0, opacity: 1 };
 export const FIT_RANGES = {
-  scale: { min: 0.68, max: 1.38, step: 0.01 },
+  scale: { min: 0.68, max: 1.5, step: 0.01 },
   x: { min: -0.36, max: 0.36, step: 0.01 },
   y: { min: -0.5, max: 0.5, step: 0.01 },
   opacity: { min: 0.55, max: 1, step: 0.01 },

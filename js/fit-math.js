@@ -181,7 +181,7 @@ export function faceToFit(landmarks, videoWidth, videoHeight, mirrored) {
   // 측면에서 턱받이가 갑자기 작아지지 않게 한다.
   // 상한 0.58w: 근접 시 화면을 다 덮는 폭주 방지 (렌더 기준 약 75%).
   const width = clamp(
-    earDist * 1.26 * (1 + 0.3 * yaw * yaw),
+    earDist * 1.32 * (1 + 0.3 * yaw * yaw),
     videoWidth * 0.25,
     videoWidth * 0.58,
   );
@@ -220,6 +220,25 @@ export function faceOcclusionMask(landmarks, videoWidth, videoHeight, mirrored) 
   );
   if (!oval.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))) return null;
 
+  // 목 기둥 폴리곤: 실물 착용컷에서 칼라는 목을 '감싸' 목이 원단 사이드를
+  // 가린다. 턱선 양끝(랜드마크 365/136)에서 목 길이(귀간격의 절반)만큼
+  // 내려가는 사다리꼴을 지우면, 원단이 목 뒤로 돌아간 것처럼 보이고
+  // 앞섶(단추)은 그 아래에 남는다. 랜드마크 기반이라 세그가 꺼져도 동작.
+  const jawR = oval[13]; // landmark 365
+  const chin = oval[18]; // landmark 152
+  const jawL = oval[23]; // landmark 136
+  const earL = toPixel(landmarks[234], videoWidth, videoHeight, mirrored);
+  const earR = toPixel(landmarks[454], videoWidth, videoHeight, mirrored);
+  const earDist = Math.hypot(earR.x - earL.x, earR.y - earL.y);
+  const neckDepth = earDist * 0.5;
+  const taper = 0.25; // 아래로 갈수록 목이 좁아지는 정도
+  const neck = [
+    { x: jawL.x, y: jawL.y },
+    { x: jawR.x, y: jawR.y },
+    { x: jawR.x + (chin.x - jawR.x) * taper, y: chin.y + neckDepth },
+    { x: jawL.x + (chin.x - jawL.x) * taper, y: chin.y + neckDepth },
+  ];
+
   // 퇴화된 랜드마크(점들이 한곳에 뭉친 경우 등)로 만들어진 마스크는
   // 얼굴이 아닌 엉뚱한 영역을 지워 턱받이가 잘려 보이게 만든다.
   // 윤곽이 얼굴이라 볼 만한 크기인지 확인한다.
@@ -230,7 +249,7 @@ export function faceOcclusionMask(landmarks, videoWidth, videoHeight, mirrored) 
   if (spanX < videoWidth * 0.06 || spanY < videoHeight * 0.05) return null;
   if (spanX > videoWidth * 1.2 || spanY > videoHeight * 1.2) return null;
 
-  return { oval, neck: [] };
+  return { oval, neck };
 }
 
 // 포즈 단독 핏에 "포즈→융합" 보정량을 적용해 소스 전환 시 위치가 튀지 않게 한다.

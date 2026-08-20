@@ -32,7 +32,7 @@ import { SEG_MODEL_LITE_URL } from './config.js';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v22';
+const APP_VERSION = 'v23';
 
 const $ = (id) => document.getElementById(id);
 
