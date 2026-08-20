@@ -8,7 +8,7 @@ import {
   DETECT,
   MOBILE_QUERY,
   STATUS_MESSAGES,
-} from './config.js?v36';
+} from './config.js?v37';
 import {
   poseToFit,
   faceToFit,
@@ -20,19 +20,19 @@ import {
   isPlausibleFit,
   applyFusionOffset,
   measureFusionOffset,
-} from './fit-math.js?v36';
-import { applyStopLock, smoothTimed } from './stabilizer.js?v36';
+} from './fit-math.js?v37';
+import { applyStopLock, smoothTimed } from './stabilizer.js?v37';
 import {
   drawBib,
   eraseMaskArea,
   drawBeautyLight,
-} from './renderer.js?v36';
-import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v36';
-import { SEG_MODEL_LITE_URL } from './config.js?v36';
+} from './renderer.js?v37';
+import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v37';
+import { SEG_MODEL_LITE_URL } from './config.js?v37';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v36';
+const APP_VERSION = 'v37';
 
 const $ = (id) => document.getElementById(id);
 
@@ -86,7 +86,9 @@ const state = {
   fx: { light: 1, angle: -35, flutter: 1, bright: 1, sat: 1 }, // 표현 조정
   product: PRODUCTS[0],
 };
-const FX_DEFAULTS = { light: 1, angle: -35, flutter: 1, bright: 1, sat: 1 };
+// 기본값은 사용자가 슬라이더로 확정한 세팅 (2026-08-20): 조명 160%/정면 위,
+// 채도 135%, 찰랑거림 200% — 모바일(패널 없음)에도 동일 적용된다.
+const FX_DEFAULTS = { light: 1.6, angle: 0, flutter: 2, bright: 1, sat: 1.35 };
 
 // ── 추적 내부 상태 ─────────────────────────────────────────────
 let poseLandmarker = null;
@@ -95,6 +97,41 @@ let stream = null;
 let rafId = null;
 let analyzeCanvas = null;
 let bibImage = null;
+// 노멀맵 기반 방향별 리라이팅 변형 (좌광/상광/우광) — 캔버스 2D에는 셰이더가
+// 없으므로 오프라인에서 높이맵(주름+직조+가장자리 라운딩)→노멀맵→N·L 셰이딩을
+// 구운 3장을 조명 방향에 따라 실시간 블렌딩한다. 결과: 조명 각도를 돌리거나
+// 몸이 움직이면 원단의 결·주름이 픽셀 단위로 빛에 반응.
+let bibLit = null; // { left, top, right } — 3장 모두 로드되면 활성
+let litCanvas = null;
+let litKey = '';
+
+function getLitBibSource(fit) {
+  if (!bibLit) return null;
+  const ang = ((fit.fxAngle ?? state.fx.angle) * Math.PI) / 180;
+  // 정적 각도 + 동적 광각(몸 회전·스윙·이동)을 합쳐 수평 성분을 만든다
+  const h = Math.max(-1, Math.min(1, Math.sin(ang) + (fit.lightYaw ?? 0) * 0.55));
+  const w = Math.abs(h) * Math.min(1, fit.fxLight ?? state.fx.light);
+  const key = `${Math.round(h * 24)}|${Math.round(w * 24)}`;
+  if (litKey !== key) {
+    const base = bibLit.top;
+    litCanvas ??= document.createElement('canvas');
+    if (litCanvas.width !== base.naturalWidth) {
+      litCanvas.width = base.naturalWidth;
+      litCanvas.height = base.naturalHeight;
+    }
+    const c = litCanvas.getContext('2d');
+    c.clearRect(0, 0, litCanvas.width, litCanvas.height);
+    c.globalAlpha = 1;
+    c.drawImage(base, 0, 0);
+    if (w > 0.02) {
+      c.globalAlpha = Math.min(1, w);
+      c.drawImage(h < 0 ? bibLit.left : bibLit.right, 0, 0);
+      c.globalAlpha = 1;
+    }
+    litKey = key;
+  }
+  return litCanvas;
+}
 let photoUrl = null;
 let isMobileSession = false;
 let autoStarted = false;
@@ -395,7 +432,8 @@ function renderFrame() {
   // Spark 레퍼런스의 목 옆 모습은 평면 이미지 + 높은 배치 + 얼굴 가림만으로
   // 만들어진다. 단순함이 정답.
 
-  drawBib(ctx, drawFit, state.product, state.adjust.opacity * appearRamp, bibImage);
+  const bibSource = getLitBibSource(drawFit) ?? bibImage;
+  drawBib(ctx, drawFit, state.product, state.adjust.opacity * appearRamp, bibSource);
   if (mask) eraseMaskArea(ctx, mask);
 }
 
@@ -1194,6 +1232,25 @@ function init() {
     bibImage = img;
     renderFrame();
   };
+  const litFiles = {
+    left: './assets/konny-bib-lit-left.webp?v37',
+    top: './assets/konny-bib-lit-top.webp?v37',
+    right: './assets/konny-bib-lit-right.webp?v37',
+  };
+  const litImgs = {};
+  let litLeft = Object.keys(litFiles).length;
+  for (const [dir, src] of Object.entries(litFiles)) {
+    const li = new Image();
+    li.src = src;
+    li.onload = () => {
+      litImgs[dir] = li;
+      if (--litLeft === 0) {
+        bibLit = litImgs;
+        litKey = '';
+        renderFrame();
+      }
+    };
+  }
 
   els.openCameraBtns.forEach((b) => b.addEventListener('click', () => startCamera()));
   els.photoInputs.forEach((i) => i.addEventListener('change', onPhotoSelected));

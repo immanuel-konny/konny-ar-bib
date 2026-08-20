@@ -290,7 +290,9 @@ export function drawBib(ctx, fit, product, opacity, image) {
   ctx.rotate(fit.rotation);
   ctx.globalAlpha = opacity * fit.confidence;
 
-  if (image?.complete && image.naturalWidth > 0) {
+  // 이미지(<img>)와 캔버스(리라이팅 블렌드) 소스 모두 허용
+  const srcReady = image && (image.naturalWidth ?? image.width) > 0 && (image.complete ?? true);
+  if (srcReady) {
     const { layer, layerH } = renderBibLayer(image, fit.width, fit.height, {
       yaw: fit.yaw, cacheKey: 'front', roll: fit.rotation,
       rippleAmp: fit.rippleAmp ?? 0, ripplePhase: fit.ripplePhase ?? 0,
