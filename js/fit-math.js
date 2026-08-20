@@ -220,45 +220,11 @@ export function faceOcclusionMask(landmarks, videoWidth, videoHeight, mirrored, 
   );
   if (!oval.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))) return null;
 
-  // 목 기둥 폴리곤: 실물 착용컷에서 칼라는 목을 '감싸' 목이 원단 사이드를
-  // 가린다. 턱선 양끝(랜드마크 365/136)에서 목 길이(귀간격의 절반)만큼
-  // 내려가는 사다리꼴을 지우면, 원단이 목 뒤로 돌아간 것처럼 보이고
-  // 앞섶(단추)은 그 아래에 남는다. 랜드마크 기반이라 세그가 꺼져도 동작.
-  const jawR = oval[13]; // landmark 365
-  const chin = oval[18]; // landmark 152
-  const jawL = oval[23]; // landmark 136
-  const earL = toPixel(landmarks[234], videoWidth, videoHeight, mirrored);
-  const earR = toPixel(landmarks[454], videoWidth, videoHeight, mirrored);
-  const earDist = Math.hypot(earR.x - earL.x, earR.y - earL.y);
-  // 깊이는 해부학 추정(귀간격 0.5)과 "턱받이 상단+30%" 중 얕은 쪽 —
-  // 고정 깊이만 쓰면 원단이 목 밑동에 앉는 성인 구도에서 기둥이 앞섶까지
-  // 관통한다(2026-08-20 PC 캡처). 바닥은 완만한 U자로, 실물 칼라의
-  // 목선 파임처럼 보이게 한다.
-  const neckBottom = Math.min(chin.y + earDist * 0.5, neckBottomLimit);
-  if (neckBottom <= chin.y + earDist * 0.08) {
-    return { oval, neck: [] }; // 원단이 턱 바로 아래면 목 지움 불필요
-  }
-  const taper = 0.3;
-  const sideY = chin.y + (neckBottom - chin.y) * 0.8;
-  const neck = [
-    { x: jawL.x, y: jawL.y },
-    { x: jawR.x, y: jawR.y },
-    { x: jawR.x + (chin.x - jawR.x) * taper, y: sideY },
-    { x: chin.x, y: neckBottom },
-    { x: jawL.x + (chin.x - jawL.x) * taper, y: sideY },
-  ];
-
-  // 퇴화된 랜드마크(점들이 한곳에 뭉친 경우 등)로 만들어진 마스크는
-  // 얼굴이 아닌 엉뚱한 영역을 지워 턱받이가 잘려 보이게 만든다.
-  // 윤곽이 얼굴이라 볼 만한 크기인지 확인한다.
-  const xs = oval.map((p) => p.x);
-  const ys = oval.map((p) => p.y);
-  const spanX = Math.max(...xs) - Math.min(...xs);
-  const spanY = Math.max(...ys) - Math.min(...ys);
-  if (spanX < videoWidth * 0.06 || spanY < videoHeight * 0.05) return null;
-  if (spanX > videoWidth * 1.2 || spanY > videoHeight * 1.2) return null;
-
-  return { oval, neck };
+  // 목 가림 폴리곤은 v25에서 최종 제거. 세 번의 시도(피부존/고정기둥/제한기둥)
+  // 모두 실제 목-옷 경계를 모른 채 지워서 셔츠 위 원단을 도려내는 아티팩트를
+  // 만들었다. 현재 앵커(턱+어깨 블렌드+클램프)가 원단을 목 밑동에 앉히므로
+  // 목 가림 없이도 착용 구조가 성립한다. 얼굴 오벌만 유지한다.
+  return { oval, neck: [] };
 }
 
 // 포즈 단독 핏에 "포즈→융합" 보정량을 적용해 소스 전환 시 위치가 튀지 않게 한다.
