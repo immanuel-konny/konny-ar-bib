@@ -8,7 +8,7 @@ import {
   DETECT,
   MOBILE_QUERY,
   STATUS_MESSAGES,
-} from './config.js?v38';
+} from './config.js?v39';
 import {
   poseToFit,
   faceToFit,
@@ -20,19 +20,19 @@ import {
   isPlausibleFit,
   applyFusionOffset,
   measureFusionOffset,
-} from './fit-math.js?v38';
-import { applyStopLock, smoothTimed } from './stabilizer.js?v38';
+} from './fit-math.js?v39';
+import { applyStopLock, smoothTimed } from './stabilizer.js?v39';
 import {
   drawBib,
   eraseMaskArea,
   drawBeautyLight,
-} from './renderer.js?v38';
-import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v38';
-import { SEG_MODEL_LITE_URL } from './config.js?v38';
+} from './renderer.js?v39';
+import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v39';
+import { SEG_MODEL_LITE_URL } from './config.js?v39';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v38';
+const APP_VERSION = 'v39';
 
 const $ = (id) => document.getElementById(id);
 
@@ -248,7 +248,7 @@ function updateHud(now) {
     `engine:${diag.engine} delegate:${delegatePref} input:${analyzeMode} stage:${stageIndex}${hasEverDetected ? '*' : ''}`,
     `video:${v?.videoWidth ?? 0}x${v?.videoHeight ?? 0} mobile:${isMobileSession} seg:${segDisabled ? 'off' : segmenter ? `${segTier} ${diag.segRuns}r e${diag.segErrors} ${diag.segCost ?? 0}ms` : '-'}`,
     `pose:${diag.poseHits}/${diag.poseRuns} e${diag.poseErrors} face:${diag.faceHits}/${diag.faceRuns} e${diag.faceErrors}${faceForcedCpu ? ' faceCPU' : ''}`,
-    `fit:${renderedFit ? `${Math.round(renderedFit.x)},${Math.round(renderedFit.y)} w${Math.round(renderedFit.width)}` : '-'} mask:${mask ? 'y' : 'n'}`,
+    `fit:${renderedFit ? `${Math.round(renderedFit.x)},${Math.round(renderedFit.y)} w${Math.round(renderedFit.width)}` : '-'} mask:${mask ? 'y' : 'n'} cloth:${diag.cloth ?? 0} vx:${diag.vx ?? 0} sw:${diag.swing ?? 0}`,
     diag.lastError ? `err:${String(diag.lastError).replace(/\s+/g, ' ').slice(0, 72)}` : '',
   ].filter(Boolean).join('\n');
 }
@@ -357,6 +357,10 @@ function renderFrame() {
     : 1;
   // 이동 관성 스웨이: 좌우로 움직일 때 뒤따르는 쪽 원단이 살짝 눕는다.
   const nowRender = performance.now();
+  // 실제 프레임 간격 — prevRenderTs를 갱신하기 "전"에 확보해야 한다.
+  // v34~38은 갱신 후에 계산해 항상 0 → 하한 8ms 고정 → 물리가 실시간의
+  // 1/4 속도로 돌아 스윙이 자라기 전에 움직임이 끝났다(찰랑 무반응의 진짜 원인).
+  const frameDtMs = prevRenderTs ? Math.min(80, Math.max(4, nowRender - prevRenderTs)) : 16;
   if (prevRenderX !== null) {
     const dtMs = Math.max(8, nowRender - prevRenderTs);
     const vx = ((renderedFit.x - prevRenderX) / dtMs) * 1000;
@@ -372,16 +376,20 @@ function renderFrame() {
   // 진자 스윙: 좌우 이동을 입력으로 목(상단 중앙)을 축 삼아 흔들리고 감쇠 복원.
   // 회전+미소 평행이동뿐이라 실루엣은 보존된다.
   {
-    const dtS = Math.min(0.05, Math.max(0.008, (nowRender - prevRenderTs) / 1000)) || 0.016;
+    const dtS = Math.min(0.06, Math.max(0.008, frameDtMs / 1000));
     // 원시 감지 좌표의 속도 — 안정화 필터가 지우기 전의 실제 움직임.
     // (v33은 필터 후 속도를 써서 작은 움직임에 전혀 반응하지 못했다)
-    if (rawX !== null) {
+    // 감지값이 실제로 바뀐 순간에만 속도를 갱신한다. 매 렌더 프레임마다
+    // 갱신하면 감지가 없던 프레임의 v=0이 섞여 속도가 절반으로 희석됐다.
+    if (rawX !== null && rawX !== prevRawX) {
       if (prevRawX !== null && nowRender > prevRawTs) {
         const v = ((rawX - prevRawX) / Math.max(8, nowRender - prevRawTs)) * 1000;
-        rawVx += (v - rawVx) * Math.min(1, dtS * 12); // 가벼운 저역필터
+        rawVx += (v - rawVx) * 0.5; // 감지 이벤트 단위 저역필터 (~2회 평균)
       }
       prevRawX = rawX;
       prevRawTs = nowRender;
+    } else {
+      rawVx *= Math.max(0, 1 - dtS * 3); // 감지 공백 시 서서히 감쇠
     }
     // 데드밴드 + 히스테리시스: 정지 상태의 감지 노이즈(±수 px 지터)가
     // 속도로 오인돼 원단이 계속 꿈틀거리는 것("살아있는 문어") 방지.
@@ -428,6 +436,8 @@ function renderFrame() {
     drawFit.lightYaw = Math.max(-1, Math.min(1,
       drawFit.yaw + swingA * 2.6 + driveV * 0.0006));
     diag.cloth = clothMoving ? 1 : 0;
+    diag.vx = Math.round(rawVx);
+    diag.swing = Math.round(swingA * 573) / 10; // deg
     drawFit.fxLight = state.fx.light;
     drawFit.fxAngle = state.fx.angle;
     drawFit.fxBright = state.fx.bright;
@@ -1239,9 +1249,9 @@ function init() {
     renderFrame();
   };
   const litFiles = {
-    left: './assets/konny-bib-lit-left.webp?v38',
-    top: './assets/konny-bib-lit-top.webp?v38',
-    right: './assets/konny-bib-lit-right.webp?v38',
+    left: './assets/konny-bib-lit-left.webp?v39',
+    top: './assets/konny-bib-lit-top.webp?v39',
+    right: './assets/konny-bib-lit-right.webp?v39',
   };
   const litImgs = {};
   let litLeft = Object.keys(litFiles).length;
