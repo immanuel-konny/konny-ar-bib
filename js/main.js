@@ -8,7 +8,7 @@ import {
   DETECT,
   MOBILE_QUERY,
   STATUS_MESSAGES,
-} from './config.js?v33';
+} from './config.js?v34';
 import {
   poseToFit,
   faceToFit,
@@ -20,19 +20,19 @@ import {
   isPlausibleFit,
   applyFusionOffset,
   measureFusionOffset,
-} from './fit-math.js?v33';
-import { applyStopLock, smoothTimed } from './stabilizer.js?v33';
+} from './fit-math.js?v34';
+import { applyStopLock, smoothTimed } from './stabilizer.js?v34';
 import {
   drawBib,
   eraseMaskArea,
   drawBeautyLight,
-} from './renderer.js?v33';
-import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v33';
-import { SEG_MODEL_LITE_URL } from './config.js?v33';
+} from './renderer.js?v34';
+import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v34';
+import { SEG_MODEL_LITE_URL } from './config.js?v34';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v33';
+const APP_VERSION = 'v34';
 
 const $ = (id) => document.getElementById(id);
 
@@ -149,6 +149,10 @@ let swingA = 0; // 스윙 각 (rad)
 let swingV = 0;
 let rippleAmp = 0;
 let ripplePhase = 0;
+let rawX = null; // 필터 이전 원시 감지 x — 안정화가 지운 움직임을 물리 구동에 사용
+let rawVx = 0;
+let prevRawX = null;
+let prevRawTs = 0;
 let lastSegRunTs = 0;
 
 // 얼굴 엔진만 GPU에서 실패하는 기기 대응. 예외를 던지는 경우뿐 아니라
@@ -324,22 +328,34 @@ function renderFrame() {
   // 회전+미소 평행이동뿐이라 실루엣은 보존된다.
   {
     const dtS = Math.min(0.05, Math.max(0.008, (nowRender - prevRenderTs) / 1000)) || 0.016;
-    const vx = prevRenderX !== null ? ((renderedFit.x - prevRenderX) / Math.max(8, nowRender - prevRenderTs)) * 1000 : 0;
-    const force = Math.max(-3, Math.min(3, -vx * 0.011));
-    swingV += (-42 * swingA - 7 * swingV + force) * dtS;
+    // 원시 감지 좌표의 속도 — 안정화 필터가 지우기 전의 실제 움직임.
+    // (v33은 필터 후 속도를 써서 작은 움직임에 전혀 반응하지 못했다)
+    if (rawX !== null) {
+      if (prevRawX !== null && nowRender > prevRawTs) {
+        const v = ((rawX - prevRawX) / Math.max(8, nowRender - prevRawTs)) * 1000;
+        rawVx += (v - rawVx) * Math.min(1, dtS * 12); // 가벼운 저역필터
+      }
+      prevRawX = rawX;
+      prevRawTs = nowRender;
+    }
+    const force = Math.max(-5, Math.min(5, -rawVx * 0.028));
+    swingV += (-32 * swingA - 5.5 * swingV + force) * dtS;
     swingA += swingV * dtS;
-    swingA = Math.max(-0.09, Math.min(0.09, swingA));
+    swingA = Math.max(-0.14, Math.min(0.14, swingA));
     drawFit.rotation += swingA;
     drawFit.x -= (drawFit.height / 2) * swingA; // 목 축 회전 보정 (소각 근사)
 
-    // 밑단 리플: 속도가 있을 때만 출렁이고 정지 시 0으로 감쇠
-    const speed = Math.abs(vx) + Math.abs(swingV) * 400;
-    const targetAmp = Math.min(0.035, speed * 0.00011);
+    // 밑단 리플: 움직임에 비례해 출렁이고 정지 시 0으로 감쇠
+    const speed = Math.abs(rawVx) + Math.abs(swingV) * 500;
+    const targetAmp = Math.min(0.05, speed * 0.0003);
     rippleAmp += (targetAmp - rippleAmp) * Math.min(1, dtS * 6);
-    ripplePhase += dtS * (7 + speed * 0.02);
+    ripplePhase += dtS * (8 + speed * 0.03);
     drawFit.rippleAmp = rippleAmp;
     drawFit.ripplePhase = ripplePhase;
-    drawFit.sheenShift = swingA * 1.6; // 스윙에 맞춰 광 띠가 함께 흐름
+    drawFit.sheenShift = swingA * 2.0;
+    // 조명 각: 몸 회전 + 스윙 + 이동 속도 — 기울이기만 해도 빛이 흐른다
+    drawFit.lightYaw = Math.max(-1, Math.min(1,
+      drawFit.yaw + swingA * 2.6 + rawVx * 0.0006));
   }
 
   // 뒤판 레이어는 v30에서 제거 — 이중 스캘럽 테두리 아티팩트(사용자 확인).
@@ -375,6 +391,9 @@ function resetTracking() {
   swingA = 0;
   swingV = 0;
   rippleAmp = 0;
+  rawX = null;
+  prevRawX = null;
+  rawVx = 0;
 }
 
 // ── 엔진 준비 ─────────────────────────────────────────────────
@@ -764,6 +783,7 @@ function loop() {
       hasEverDetected = true;
       lastSuccessTs = now;
       diag.lastError = null; // 정상 복구되면 이전 오류 표시를 지운다
+      rawX = merged.fit.x; // 물리 구동용 원시 좌표 (필터 이전)
       if (merged.ts !== lastFitTs) {
         if (!lockedFit) appearTs = now; // 새로 잡힌 순간부터 페이드인
         // 포즈↔융합은 보정량으로 정렬되므로 링을 비우지 않는다.

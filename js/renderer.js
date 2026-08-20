@@ -78,15 +78,16 @@ const EDGE_SHADE_BASE = 0.04; // 가장자리 기본 음영 — 화사한 인상
 // 동적 조명(v32): 고정 가상 광원(정면 상단) 기준. 몸 방향(yaw)·기울기(roll)에
 // 따라 원단 위 명암과 시인(sheen) 밴드가 이동해 "빛이 원단을 스치는" 느낌을 낸다.
 // 코튼은 광택이 낮으므로 전부 은은하게 — 정지 정면에서는 거의 중립.
-const LIGHT_DIFFUSE_DARK = 0.17; // |yaw|=1에서 먼 쪽 최대 음영
-const LIGHT_DIFFUSE_BRIGHT = 0.11; // 가까운 쪽 최대 밝기
-const LIGHT_SHEEN_ALPHA = 0.10; // 시인 밴드 밝기 (v32 5.5%는 비가시 — 상향)
-const LIGHT_SHEEN_TRAVEL = 0.34; // yaw에 따른 밴드 이동 거리 (폭 비율)
-const LIGHT_TOP_AMBIENT = 0.06; // 천장광: 정면 정지에서도 인지되는 상단 광
+const LIGHT_DIFFUSE_DARK = 0.22; // 광원 반대쪽 최대 음영
+const LIGHT_DIFFUSE_BRIGHT = 0.13; // 광원 쪽 최대 밝기
+const LIGHT_SHEEN_ALPHA = 0.14; // 시인 밴드 밝기
+const LIGHT_SHEEN_TRAVEL = 0.40; // 밴드 이동 거리 (폭 비율)
+const LIGHT_TOP_AMBIENT = 0.06; // 천장광
+const LIGHT_KEY_DIAG = 0.075; // 고정 키라이트(좌상단 사광) — 정지 화면에서도 "빛 받은" 인상
 
 const bibLayerCache = {}; // 앞판/뒤판이 각자의 오프스크린을 사용
 
-function renderBibLayer(image, width, height, yaw, cacheKey = 'front', roll = 0, rippleAmp = 0, ripplePhase = 0, sheenShift = 0) {
+function renderBibLayer(image, width, height, yaw, cacheKey = 'front', roll = 0, rippleAmp = 0, ripplePhase = 0, sheenShift = 0, lightYaw = null) {
   const p = Math.max(-1, Math.min(1, yaw || 0)) * PERSPECTIVE_MAX;
   const pad = Math.ceil(height * (Math.abs(p) / 2 + COLLAR_CURVE)) + 2;
   const layerW = Math.max(2, Math.ceil(width));
@@ -152,8 +153,9 @@ function renderBibLayer(image, width, height, yaw, cacheKey = 'front', roll = 0,
   lctx.fillStyle = chinShadow;
   lctx.fillRect(0, 0, layerW, layerH);
 
-  // ── 동적 조명 (v32) — 원단 픽셀 위에만(source-atop 유지 상태) ──
-  const ly = Math.max(-1, Math.min(1, yaw || 0));
+  // ── 동적 조명 — 원단 픽셀 위에만(source-atop 유지 상태) ──
+  // lightYaw: 몸 회전뿐 아니라 기울기·이동(스윙)으로도 구동되는 조명 각
+  const ly = Math.max(-1, Math.min(1, (lightYaw ?? yaw) || 0));
   // 광원은 월드 고정: 원단이 roll로 기울면 그라데이션은 반대로 기울어 보정
   const dirX = Math.cos(-roll);
   const dirY = Math.sin(-roll);
@@ -162,6 +164,14 @@ function renderBibLayer(image, width, height, yaw, cacheKey = 'front', roll = 0,
   const R = layerW / 2;
 
   // ① 확산 음영: 몸이 돌면 광원 반대쪽(먼 쪽)이 어두워지고 가까운 쪽이 밝아짐
+  // ⓪ 고정 키라이트: 좌상단 사광 — 정지 정면에서도 원단이 빛을 받은 인상
+  const gk = lctx.createLinearGradient(0, 0, layerW, layerH);
+  gk.addColorStop(0, `rgba(255, 250, 243, ${LIGHT_KEY_DIAG})`);
+  gk.addColorStop(0.5, 'rgba(255, 250, 243, 0)');
+  gk.addColorStop(1, `rgba(45, 32, 24, ${(LIGHT_KEY_DIAG * 0.8).toFixed(3)})`);
+  lctx.fillStyle = gk;
+  lctx.fillRect(0, 0, layerW, layerH);
+
   if (Math.abs(ly) > 0.02) {
     const dark = LIGHT_DIFFUSE_DARK * Math.abs(ly);
     const bright = LIGHT_DIFFUSE_BRIGHT * Math.abs(ly);
@@ -260,6 +270,7 @@ export function drawBib(ctx, fit, product, opacity, image) {
     const { layer, layerH } = renderBibLayer(
       image, fit.width, fit.height, fit.yaw, 'front', fit.rotation,
       fit.rippleAmp ?? 0, fit.ripplePhase ?? 0, fit.sheenShift ?? 0,
+      fit.lightYaw ?? null,
     );
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
