@@ -8,7 +8,7 @@ import {
   DETECT,
   MOBILE_QUERY,
   STATUS_MESSAGES,
-} from './config.js?v37';
+} from './config.js?v38';
 import {
   poseToFit,
   faceToFit,
@@ -20,19 +20,19 @@ import {
   isPlausibleFit,
   applyFusionOffset,
   measureFusionOffset,
-} from './fit-math.js?v37';
-import { applyStopLock, smoothTimed } from './stabilizer.js?v37';
+} from './fit-math.js?v38';
+import { applyStopLock, smoothTimed } from './stabilizer.js?v38';
 import {
   drawBib,
   eraseMaskArea,
   drawBeautyLight,
-} from './renderer.js?v37';
-import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v37';
-import { SEG_MODEL_LITE_URL } from './config.js?v37';
+} from './renderer.js?v38';
+import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v38';
+import { SEG_MODEL_LITE_URL } from './config.js?v38';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v37';
+const APP_VERSION = 'v38';
 
 const $ = (id) => document.getElementById(id);
 
@@ -386,15 +386,21 @@ function renderFrame() {
     // 데드밴드 + 히스테리시스: 정지 상태의 감지 노이즈(±수 px 지터)가
     // 속도로 오인돼 원단이 계속 꿈틀거리는 것("살아있는 문어") 방지.
     // 움직임 시작 판정 60px/s, 종료 판정 25px/s.
+    const flut = state.fx.flutter;
+    // 슬라이더는 세기(힘 한계·최대 기울기·리플 상한)만 배율한다.
+    // v35~37은 힘 클램프가 ±5 고정이라 보통 속도(200px/s+)에서 이미 포화 —
+    // 100%와 200%가 같은 세기로 보였다(슬라이더 무반응의 원인).
+    // 시작/종료 문턱은 v35 값 고정 — 낮추면 정지 지터가 다시 살아난다(문어).
     if (!clothMoving && Math.abs(rawVx) > 60) clothMoving = true;
     else if (clothMoving && Math.abs(rawVx) < 25) clothMoving = false;
     const driveV = clothMoving ? rawVx : 0;
 
-    const flut = state.fx.flutter;
-    const force = Math.max(-5, Math.min(5, -driveV * 0.028 * flut));
+    const fMax = 5 * Math.max(0.25, flut);
+    const force = Math.max(-fMax, Math.min(fMax, -driveV * 0.03 * flut));
     swingV += (-32 * swingA - 5.5 * swingV + force) * dtS;
     swingA += swingV * dtS;
-    swingA = Math.max(-0.14, Math.min(0.14, swingA));
+    const aMax = 0.1 * Math.max(0.5, flut); // 200% → 최대 ±11.5°
+    swingA = Math.max(-aMax, Math.min(aMax, swingA));
     if (!clothMoving) {
       // 정착: 잔진동 빠르게 흡수, 충분히 작아지면 스냅 0 → 원형 그대로
       swingV *= 1 - Math.min(1, dtS * 10);
@@ -408,7 +414,7 @@ function renderFrame() {
 
     // 밑단 리플: 따라오는 동안만 출렁, 정착하면 위상까지 정지 → 완전 원형
     const speed = clothMoving ? Math.abs(driveV) + Math.abs(swingV) * 500 : 0;
-    const targetAmp = clothMoving ? Math.min(0.05 * Math.min(flut, 1.6), speed * 0.0003 * flut) : 0;
+    const targetAmp = clothMoving ? Math.min(0.045 * flut, speed * 0.0005 * flut) : 0;
     rippleAmp += (targetAmp - rippleAmp) * Math.min(1, dtS * (clothMoving ? 6 : 10));
     if (rippleAmp > 0.004) {
       ripplePhase += dtS * (8 + speed * 0.03);
@@ -1233,9 +1239,9 @@ function init() {
     renderFrame();
   };
   const litFiles = {
-    left: './assets/konny-bib-lit-left.webp?v37',
-    top: './assets/konny-bib-lit-top.webp?v37',
-    right: './assets/konny-bib-lit-right.webp?v37',
+    left: './assets/konny-bib-lit-left.webp?v38',
+    top: './assets/konny-bib-lit-top.webp?v38',
+    right: './assets/konny-bib-lit-right.webp?v38',
   };
   const litImgs = {};
   let litLeft = Object.keys(litFiles).length;
