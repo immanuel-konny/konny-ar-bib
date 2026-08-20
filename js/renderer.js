@@ -78,12 +78,12 @@ const EDGE_SHADE_BASE = 0.04; // 가장자리 기본 음영 — 화사한 인상
 // 동적 조명(v32): 고정 가상 광원(정면 상단) 기준. 몸 방향(yaw)·기울기(roll)에
 // 따라 원단 위 명암과 시인(sheen) 밴드가 이동해 "빛이 원단을 스치는" 느낌을 낸다.
 // 코튼은 광택이 낮으므로 전부 은은하게 — 정지 정면에서는 거의 중립.
-const LIGHT_DIFFUSE_DARK = 0.22; // 광원 반대쪽 최대 음영
-const LIGHT_DIFFUSE_BRIGHT = 0.13; // 광원 쪽 최대 밝기
-const LIGHT_SHEEN_ALPHA = 0.14; // 시인 밴드 밝기
+const LIGHT_DIFFUSE_DARK = 0.34; // 광원 반대쪽 최대 음영 (대비 극명하게)
+const LIGHT_DIFFUSE_BRIGHT = 0.20; // 광원 쪽 최대 밝기
+const LIGHT_SHEEN_ALPHA = 0.20; // 시인 밴드 밝기
 const LIGHT_SHEEN_TRAVEL = 0.40; // 밴드 이동 거리 (폭 비율)
-const LIGHT_TOP_AMBIENT = 0.06; // 천장광
-const LIGHT_KEY_DIAG = 0.075; // 고정 키라이트(좌상단 사광) — 정지 화면에서도 "빛 받은" 인상
+const LIGHT_TOP_AMBIENT = 0.08; // 천장광
+const LIGHT_KEY_DIAG = 0.11; // 고정 키라이트(좌상단 사광)
 
 const bibLayerCache = {}; // 앞판/뒤판이 각자의 오프스크린을 사용
 

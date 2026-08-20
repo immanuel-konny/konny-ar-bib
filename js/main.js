@@ -8,7 +8,7 @@ import {
   DETECT,
   MOBILE_QUERY,
   STATUS_MESSAGES,
-} from './config.js?v34';
+} from './config.js?v35';
 import {
   poseToFit,
   faceToFit,
@@ -20,19 +20,19 @@ import {
   isPlausibleFit,
   applyFusionOffset,
   measureFusionOffset,
-} from './fit-math.js?v34';
-import { applyStopLock, smoothTimed } from './stabilizer.js?v34';
+} from './fit-math.js?v35';
+import { applyStopLock, smoothTimed } from './stabilizer.js?v35';
 import {
   drawBib,
   eraseMaskArea,
   drawBeautyLight,
-} from './renderer.js?v34';
-import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v34';
-import { SEG_MODEL_LITE_URL } from './config.js?v34';
+} from './renderer.js?v35';
+import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v35';
+import { SEG_MODEL_LITE_URL } from './config.js?v35';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v34';
+const APP_VERSION = 'v35';
 
 const $ = (id) => document.getElementById(id);
 
@@ -153,6 +153,7 @@ let rawX = null; // 필터 이전 원시 감지 x — 안정화가 지운 움직
 let rawVx = 0;
 let prevRawX = null;
 let prevRawTs = 0;
+let clothMoving = false; // 데드밴드 히스테리시스 — 정지 노이즈로 꿈틀거리지 않게
 let lastSegRunTs = 0;
 
 // 얼굴 엔진만 GPU에서 실패하는 기기 대응. 예외를 던지는 경우뿐 아니라
@@ -338,24 +339,44 @@ function renderFrame() {
       prevRawX = rawX;
       prevRawTs = nowRender;
     }
-    const force = Math.max(-5, Math.min(5, -rawVx * 0.028));
+    // 데드밴드 + 히스테리시스: 정지 상태의 감지 노이즈(±수 px 지터)가
+    // 속도로 오인돼 원단이 계속 꿈틀거리는 것("살아있는 문어") 방지.
+    // 움직임 시작 판정 60px/s, 종료 판정 25px/s.
+    if (!clothMoving && Math.abs(rawVx) > 60) clothMoving = true;
+    else if (clothMoving && Math.abs(rawVx) < 25) clothMoving = false;
+    const driveV = clothMoving ? rawVx : 0;
+
+    const force = Math.max(-5, Math.min(5, -driveV * 0.028));
     swingV += (-32 * swingA - 5.5 * swingV + force) * dtS;
     swingA += swingV * dtS;
     swingA = Math.max(-0.14, Math.min(0.14, swingA));
+    if (!clothMoving) {
+      // 정착: 잔진동 빠르게 흡수, 충분히 작아지면 스냅 0 → 원형 그대로
+      swingV *= 1 - Math.min(1, dtS * 10);
+      if (Math.abs(swingA) < 0.012 && Math.abs(swingV) < 0.08) {
+        swingA = 0;
+        swingV = 0;
+      }
+    }
     drawFit.rotation += swingA;
     drawFit.x -= (drawFit.height / 2) * swingA; // 목 축 회전 보정 (소각 근사)
 
-    // 밑단 리플: 움직임에 비례해 출렁이고 정지 시 0으로 감쇠
-    const speed = Math.abs(rawVx) + Math.abs(swingV) * 500;
-    const targetAmp = Math.min(0.05, speed * 0.0003);
-    rippleAmp += (targetAmp - rippleAmp) * Math.min(1, dtS * 6);
-    ripplePhase += dtS * (8 + speed * 0.03);
+    // 밑단 리플: 따라오는 동안만 출렁, 정착하면 위상까지 정지 → 완전 원형
+    const speed = clothMoving ? Math.abs(driveV) + Math.abs(swingV) * 500 : 0;
+    const targetAmp = clothMoving ? Math.min(0.05, speed * 0.0003) : 0;
+    rippleAmp += (targetAmp - rippleAmp) * Math.min(1, dtS * (clothMoving ? 6 : 10));
+    if (rippleAmp > 0.004) {
+      ripplePhase += dtS * (8 + speed * 0.03);
+    } else {
+      rippleAmp = 0;
+    }
     drawFit.rippleAmp = rippleAmp;
     drawFit.ripplePhase = ripplePhase;
     drawFit.sheenShift = swingA * 2.0;
-    // 조명 각: 몸 회전 + 스윙 + 이동 속도 — 기울이기만 해도 빛이 흐른다
+    // 조명 각: 몸 회전 + 스윙 + 이동 속도
     drawFit.lightYaw = Math.max(-1, Math.min(1,
-      drawFit.yaw + swingA * 2.6 + rawVx * 0.0006));
+      drawFit.yaw + swingA * 2.6 + driveV * 0.0006));
+    diag.cloth = clothMoving ? 1 : 0;
   }
 
   // 뒤판 레이어는 v30에서 제거 — 이중 스캘럽 테두리 아티팩트(사용자 확인).
