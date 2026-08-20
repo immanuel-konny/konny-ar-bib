@@ -283,6 +283,23 @@ export function drawBibBack(ctx, fit, image) {
   ctx.restore();
 }
 
+// ctx.filter 지원 감지 — 미지원(구형 iOS 등)이면 드롭 섀도만 생략
+const FILTER_OK = (() => {
+  try {
+    const c = document.createElement('canvas').getContext('2d');
+    c.filter = 'blur(1px)';
+    return c.filter === 'blur(1px)';
+  } catch {
+    return false;
+  }
+})();
+
+// 대기 화면 제품 연출과 동일한 톤의 드롭 섀도 —
+// 부드럽고 넓게 퍼지며, 키라이트 반대쪽으로 살짝 밀리고 대부분 아래로 진다.
+const SHADOW_ALPHA = 0.22;
+const SHADOW_DROP = 0.055; // layerH 대비 수직 낙하
+const SHADOW_BLUR = 0.04; // width 대비 블러 반경 — 대기 화면처럼 넓고 은은하게
+
 // 턱받이 본체 그리기 — 원본 실루엣·비율 유지 + 접촉 그림자
 export function drawBib(ctx, fit, product, opacity, image) {
   ctx.save();
@@ -302,6 +319,17 @@ export function drawBib(ctx, fit, product, opacity, image) {
     });
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
+    if (FILTER_OK) {
+      const aRad = ((fit.fxAngle ?? -35) * Math.PI) / 180;
+      const sdx = -Math.sin(aRad) * fit.width * 0.012;
+      const sdy = layerH * SHADOW_DROP;
+      const blurPx = Math.max(3, fit.width * SHADOW_BLUR);
+      ctx.save();
+      ctx.filter = `blur(${blurPx.toFixed(1)}px) brightness(0)`;
+      ctx.globalAlpha = opacity * fit.confidence * SHADOW_ALPHA;
+      ctx.drawImage(layer, -fit.width / 2 + sdx, -layerH / 2 + sdy, fit.width, layerH);
+      ctx.restore();
+    }
     ctx.drawImage(layer, -fit.width / 2, -layerH / 2, fit.width, layerH);
   } else {
     drawFallbackShape(ctx, fit, product);
