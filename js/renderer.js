@@ -87,7 +87,18 @@ const LIGHT_KEY_DIAG = 0.11; // 고정 키라이트(좌상단 사광)
 
 const bibLayerCache = {}; // 앞판/뒤판이 각자의 오프스크린을 사용
 
-function renderBibLayer(image, width, height, yaw, cacheKey = 'front', roll = 0, rippleAmp = 0, ripplePhase = 0, sheenShift = 0, lightYaw = null) {
+function renderBibLayer(image, width, height, o = {}) {
+  const yaw = o.yaw ?? 0;
+  const cacheKey = o.cacheKey ?? 'front';
+  const roll = o.roll ?? 0;
+  const rippleAmp = o.rippleAmp ?? 0;
+  const ripplePhase = o.ripplePhase ?? 0;
+  const sheenShift = o.sheenShift ?? 0;
+  const lightYaw = o.lightYaw ?? null;
+  const fxLight = o.fxLight ?? 1; // 조명 강도 배율 (0~2)
+  const fxAngle = o.fxAngle ?? -35; // 키라이트 각도 (도, 0=정수리, -=왼쪽)
+  const fxBright = o.fxBright ?? 1; // 원단 밝기
+  const fxSat = o.fxSat ?? 1; // 원단 채도
   const p = Math.max(-1, Math.min(1, yaw || 0)) * PERSPECTIVE_MAX;
   const pad = Math.ceil(height * (Math.abs(p) / 2 + COLLAR_CURVE)) + 2;
   const layerW = Math.max(2, Math.ceil(width));
@@ -104,6 +115,10 @@ function renderBibLayer(image, width, height, yaw, cacheKey = 'front', roll = 0,
   lctx.imageSmoothingEnabled = true;
   lctx.imageSmoothingQuality = 'high';
 
+  // 원단 밝기·채도: 스트립 드로우에 캔버스 필터 적용 (지원 브라우저)
+  if ((fxBright !== 1 || fxSat !== 1) && 'filter' in lctx) {
+    lctx.filter = `brightness(${fxBright}) saturate(${fxSat})`;
+  }
   const n = PERSPECTIVE_SLICES;
   const srcW = image.naturalWidth ?? image.width;
   const srcH = image.naturalHeight ?? image.height;
@@ -124,6 +139,7 @@ function renderBibLayer(image, width, height, yaw, cacheKey = 'front', roll = 0,
     );
     x += dw;
   }
+  lctx.filter = 'none';
 
   // 좌우 가장자리 음영 — 원측(far)은 몸 뒤로 돌아가므로 근측보다 살짝 진하게
   const nearAlpha = EDGE_SHADE_BASE * 0.8;
@@ -164,17 +180,25 @@ function renderBibLayer(image, width, height, yaw, cacheKey = 'front', roll = 0,
   const R = layerW / 2;
 
   // ① 확산 음영: 몸이 돌면 광원 반대쪽(먼 쪽)이 어두워지고 가까운 쪽이 밝아짐
-  // ⓪ 고정 키라이트: 좌상단 사광 — 정지 정면에서도 원단이 빛을 받은 인상
-  const gk = lctx.createLinearGradient(0, 0, layerW, layerH);
-  gk.addColorStop(0, `rgba(255, 250, 243, ${LIGHT_KEY_DIAG})`);
+  // ⓪ 고정 키라이트: 각도 조절 가능한 사광 — 정지 화면에서도 빛 받은 인상
+  const fxA = Math.max(0, Math.min(3, fxLight));
+  const aRad = (fxAngle * Math.PI) / 180;
+  const sx = Math.sin(aRad) * (layerW / 2);
+  const sy = -Math.cos(aRad) * (layerH / 2);
+  const keyA = Math.min(0.5, LIGHT_KEY_DIAG * fxA);
+  const gk = lctx.createLinearGradient(
+    layerW / 2 + sx, layerH / 2 + sy,
+    layerW / 2 - sx, layerH / 2 - sy,
+  );
+  gk.addColorStop(0, `rgba(255, 250, 243, ${keyA.toFixed(3)})`);
   gk.addColorStop(0.5, 'rgba(255, 250, 243, 0)');
-  gk.addColorStop(1, `rgba(45, 32, 24, ${(LIGHT_KEY_DIAG * 0.8).toFixed(3)})`);
+  gk.addColorStop(1, `rgba(45, 32, 24, ${(keyA * 0.85).toFixed(3)})`);
   lctx.fillStyle = gk;
   lctx.fillRect(0, 0, layerW, layerH);
 
   if (Math.abs(ly) > 0.02) {
-    const dark = LIGHT_DIFFUSE_DARK * Math.abs(ly);
-    const bright = LIGHT_DIFFUSE_BRIGHT * Math.abs(ly);
+    const dark = Math.min(0.55, LIGHT_DIFFUSE_DARK * Math.abs(ly) * fxA);
+    const bright = Math.min(0.4, LIGHT_DIFFUSE_BRIGHT * Math.abs(ly) * fxA);
     const sgn = ly >= 0 ? 1 : -1; // yaw>0 → 오른쪽이 멀어짐(어둡게)
     const gd = lctx.createLinearGradient(
       cxL - sgn * dirX * R, cyL - sgn * dirY * R,
@@ -195,14 +219,14 @@ function renderBibLayer(image, width, height, yaw, cacheKey = 'front', roll = 0,
     bandX - bandW - dirY * 0, cyL - 0, bandX + bandW, cyL,
   );
   gs.addColorStop(0, 'rgba(255, 252, 248, 0)');
-  gs.addColorStop(0.5, `rgba(255, 252, 248, ${LIGHT_SHEEN_ALPHA})`);
+  gs.addColorStop(0.5, `rgba(255, 252, 248, ${Math.min(0.45, LIGHT_SHEEN_ALPHA * fxA).toFixed(3)})`);
   gs.addColorStop(1, 'rgba(255, 252, 248, 0)');
   lctx.fillStyle = gs;
   lctx.fillRect(0, 0, layerW, layerH);
 
   // ③ 천장광: 상단이 은은하게 밝음 (정적, 원단이 위를 향한 물리)
   const gt = lctx.createLinearGradient(0, 0, 0, layerH);
-  gt.addColorStop(0, `rgba(255, 251, 246, ${LIGHT_TOP_AMBIENT})`);
+  gt.addColorStop(0, `rgba(255, 251, 246, ${Math.min(0.3, LIGHT_TOP_AMBIENT * fxA).toFixed(3)})`);
   gt.addColorStop(0.5, 'rgba(255, 251, 246, 0)');
   lctx.fillStyle = gt;
   lctx.fillRect(0, 0, layerW, layerH);
@@ -245,7 +269,7 @@ export function drawBibBack(ctx, fit, image) {
   const h = fit.height * BACK_SCALE;
   // 앞판과 같은 아치·원근 파이프라인을 태워야 날개 구간에서도
   // 뒤판 상단이 앞판 위로 균일하게 8% 비친다 (아치 불일치 시 완전히 가려짐)
-  const { layer, layerH } = renderBibLayer(backLayerCanvas, w, h, fit.yaw, 'back');
+  const { layer, layerH } = renderBibLayer(backLayerCanvas, w, h, { yaw: fit.yaw, cacheKey: 'back' });
   ctx.save();
   // 시차: 몸이 돌면 뒤판은 반대쪽으로 밀려 먼 쪽 원단이 더 보인다
   ctx.translate(
@@ -267,11 +291,13 @@ export function drawBib(ctx, fit, product, opacity, image) {
   ctx.globalAlpha = opacity * fit.confidence;
 
   if (image?.complete && image.naturalWidth > 0) {
-    const { layer, layerH } = renderBibLayer(
-      image, fit.width, fit.height, fit.yaw, 'front', fit.rotation,
-      fit.rippleAmp ?? 0, fit.ripplePhase ?? 0, fit.sheenShift ?? 0,
-      fit.lightYaw ?? null,
-    );
+    const { layer, layerH } = renderBibLayer(image, fit.width, fit.height, {
+      yaw: fit.yaw, cacheKey: 'front', roll: fit.rotation,
+      rippleAmp: fit.rippleAmp ?? 0, ripplePhase: fit.ripplePhase ?? 0,
+      sheenShift: fit.sheenShift ?? 0, lightYaw: fit.lightYaw ?? null,
+      fxLight: fit.fxLight ?? 1, fxAngle: fit.fxAngle ?? -35,
+      fxBright: fit.fxBright ?? 1, fxSat: fit.fxSat ?? 1,
+    });
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(layer, -fit.width / 2, -layerH / 2, fit.width, layerH);

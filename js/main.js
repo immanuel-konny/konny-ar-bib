@@ -8,7 +8,7 @@ import {
   DETECT,
   MOBILE_QUERY,
   STATUS_MESSAGES,
-} from './config.js?v35';
+} from './config.js?v36';
 import {
   poseToFit,
   faceToFit,
@@ -20,19 +20,19 @@ import {
   isPlausibleFit,
   applyFusionOffset,
   measureFusionOffset,
-} from './fit-math.js?v35';
-import { applyStopLock, smoothTimed } from './stabilizer.js?v35';
+} from './fit-math.js?v36';
+import { applyStopLock, smoothTimed } from './stabilizer.js?v36';
 import {
   drawBib,
   eraseMaskArea,
   drawBeautyLight,
-} from './renderer.js?v35';
-import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v35';
-import { SEG_MODEL_LITE_URL } from './config.js?v35';
+} from './renderer.js?v36';
+import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v36';
+import { SEG_MODEL_LITE_URL } from './config.js?v36';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v35';
+const APP_VERSION = 'v36';
 
 const $ = (id) => document.getElementById(id);
 
@@ -65,6 +65,11 @@ const els = {
   offsetXOut: $('out-x'),
   offsetYOut: $('out-y'),
   opacityOut: $('out-opacity'),
+  fxLight: $('fx-light'), fxLightOut: $('out-fx-light'),
+  fxAngle: $('fx-angle'), fxAngleOut: $('out-fx-angle'),
+  fxFlutter: $('fx-flutter'), fxFlutterOut: $('out-fx-flutter'),
+  fxBright: $('fx-bright'), fxBrightOut: $('out-fx-bright'),
+  fxSat: $('fx-sat'), fxSatOut: $('out-fx-sat'),
   guideModal: $('guide-modal'),
   guideOpen: $('guide-open'),
   guideClose: $('guide-close'),
@@ -78,8 +83,10 @@ const state = {
   beauty: true,
   autoTrack: true,
   adjust: { ...FIT_DEFAULTS },
+  fx: { light: 1, angle: -35, flutter: 1, bright: 1, sat: 1 }, // 표현 조정
   product: PRODUCTS[0],
 };
+const FX_DEFAULTS = { light: 1, angle: -35, flutter: 1, bright: 1, sat: 1 };
 
 // ── 추적 내부 상태 ─────────────────────────────────────────────
 let poseLandmarker = null;
@@ -346,7 +353,8 @@ function renderFrame() {
     else if (clothMoving && Math.abs(rawVx) < 25) clothMoving = false;
     const driveV = clothMoving ? rawVx : 0;
 
-    const force = Math.max(-5, Math.min(5, -driveV * 0.028));
+    const flut = state.fx.flutter;
+    const force = Math.max(-5, Math.min(5, -driveV * 0.028 * flut));
     swingV += (-32 * swingA - 5.5 * swingV + force) * dtS;
     swingA += swingV * dtS;
     swingA = Math.max(-0.14, Math.min(0.14, swingA));
@@ -363,7 +371,7 @@ function renderFrame() {
 
     // 밑단 리플: 따라오는 동안만 출렁, 정착하면 위상까지 정지 → 완전 원형
     const speed = clothMoving ? Math.abs(driveV) + Math.abs(swingV) * 500 : 0;
-    const targetAmp = clothMoving ? Math.min(0.05, speed * 0.0003) : 0;
+    const targetAmp = clothMoving ? Math.min(0.05 * Math.min(flut, 1.6), speed * 0.0003 * flut) : 0;
     rippleAmp += (targetAmp - rippleAmp) * Math.min(1, dtS * (clothMoving ? 6 : 10));
     if (rippleAmp > 0.004) {
       ripplePhase += dtS * (8 + speed * 0.03);
@@ -377,6 +385,10 @@ function renderFrame() {
     drawFit.lightYaw = Math.max(-1, Math.min(1,
       drawFit.yaw + swingA * 2.6 + driveV * 0.0006));
     diag.cloth = clothMoving ? 1 : 0;
+    drawFit.fxLight = state.fx.light;
+    drawFit.fxAngle = state.fx.angle;
+    drawFit.fxBright = state.fx.bright;
+    drawFit.fxSat = state.fx.sat;
   }
 
   // 뒤판 레이어는 v30에서 제거 — 이중 스캘럽 테두리 아티팩트(사용자 확인).
@@ -1132,8 +1144,24 @@ function bindAdjust(input, key) {
   });
 }
 
+function syncFxOutputs() {
+  const f = state.fx;
+  if (els.fxLightOut) els.fxLightOut.textContent = `${Math.round(f.light * 100)}%`;
+  if (els.fxAngleOut) els.fxAngleOut.textContent = f.angle === 0 ? '정면 위' : (f.angle < 0 ? `왼쪽 ${-f.angle}°` : `오른쪽 ${f.angle}°`);
+  if (els.fxFlutterOut) els.fxFlutterOut.textContent = f.flutter === 0 ? '끔' : `${Math.round(f.flutter * 100)}%`;
+  if (els.fxBrightOut) els.fxBrightOut.textContent = `${Math.round(f.bright * 100)}%`;
+  if (els.fxSatOut) els.fxSatOut.textContent = `${Math.round(f.sat * 100)}%`;
+}
+
 function resetAdjust() {
   state.adjust = { ...FIT_DEFAULTS };
+  state.fx = { ...FX_DEFAULTS };
+  if (els.fxLight) els.fxLight.value = String(FX_DEFAULTS.light);
+  if (els.fxAngle) els.fxAngle.value = String(FX_DEFAULTS.angle);
+  if (els.fxFlutter) els.fxFlutter.value = String(FX_DEFAULTS.flutter);
+  if (els.fxBright) els.fxBright.value = String(FX_DEFAULTS.bright);
+  if (els.fxSat) els.fxSat.value = String(FX_DEFAULTS.sat);
+  syncFxOutputs();
   els.scale.value = String(FIT_DEFAULTS.scale);
   els.offsetX.value = String(FIT_DEFAULTS.x);
   els.offsetY.value = String(FIT_DEFAULTS.y);
@@ -1183,6 +1211,22 @@ function init() {
   bindAdjust(els.offsetY, 'y');
   bindAdjust(els.opacity, 'opacity');
   syncAdjustOutputs();
+
+  // 표현 조정 슬라이더
+  const bindFx = (input, key, fmt) => {
+    if (!input) return;
+    input.addEventListener('input', () => {
+      state.fx[key] = Number(input.value);
+      syncFxOutputs();
+      renderFrame();
+    });
+  };
+  bindFx(els.fxLight, 'light');
+  bindFx(els.fxAngle, 'angle');
+  bindFx(els.fxFlutter, 'flutter');
+  bindFx(els.fxBright, 'bright');
+  bindFx(els.fxSat, 'sat');
+  syncFxOutputs();
 
   els.photoView.addEventListener('load', () => {
     if (state.mode === 'photo' && els.photoView.src) analyzePhoto(els.photoView);
