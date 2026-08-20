@@ -24,6 +24,7 @@ import {
 import { applyStopLock, smoothTimed } from './stabilizer.js';
 import {
   drawBib,
+  drawBibBack,
   eraseMaskArea,
   drawBeautyLight,
 } from './renderer.js';
@@ -32,7 +33,7 @@ import { SEG_MODEL_LITE_URL } from './config.js';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v26';
+const APP_VERSION = 'v27';
 
 const $ = (id) => document.getElementById(id);
 
@@ -302,11 +303,10 @@ function renderFrame() {
     ? Math.min(1, (performance.now() - appearTs) / 350)
     : 1;
   // 이동 관성 스웨이: 좌우로 움직일 때 뒤따르는 쪽 원단이 살짝 눕는다.
-  // 기존 스트립 원근에 속도 항만 더하므로 직선 보존(로고 안전)은 유지된다.
   const nowRender = performance.now();
   if (prevRenderX !== null) {
     const dtMs = Math.max(8, nowRender - prevRenderTs);
-    const vx = ((renderedFit.x - prevRenderX) / dtMs) * 1000; // px/s
+    const vx = ((renderedFit.x - prevRenderX) / dtMs) * 1000;
     const target = Math.max(-0.2, Math.min(0.2, -vx * 0.0005));
     swayYaw += (target - swayYaw) * Math.min(1, dtMs / 200);
   }
@@ -315,18 +315,20 @@ function renderFrame() {
 
   const drawFit = withAdjust(renderedFit);
   drawFit.yaw = Math.max(-1, Math.min(1, drawFit.yaw + swayYaw));
-  drawBib(ctx, drawFit, state.product, state.adjust.opacity * appearRamp, bibImage);
-  if (mask) eraseMaskArea(ctx, mask);
 
-  // 인물 세그멘테이션 클리핑: 몸 실루엣 밖(배경)과 머리카락 위의 턱받이 픽셀 제거.
-  // destination-in은 캔버스의 기존 픽셀(=턱받이만)에만 작용한다.
-  // 전면 카메라 표시 공간은 좌우 반전이므로 마스크도 반전해 맞춘다.
+  // ── 실물 구조 합성 (v27): 칼라는 목 뒤까지 360° 연결된다.
+  // ① 뒤판을 그리고 ② 사람 영역을 뚫어 배경(어깨 위·목 옆)에만 남긴 뒤
+  // ③ 앞판을 위에 얹는다. 앞판은 몸 실루엣으로 자르지 않는다 —
+  // 실물 칼라는 어깨 위로 얹혀 실루엣 밖까지 나가는 것이 정상이다.
+  const flip = state.mode === 'camera' && state.mirrored;
   const segFresh =
     segKeepCanvas && segKeepTs && performance.now() - segKeepTs < DETECT.segFreshMs;
   if (segFresh) {
-    const flip = state.mode === 'camera' && state.mirrored;
+    ctx.globalAlpha = state.adjust.opacity * appearRamp;
+    drawBibBack(ctx, drawFit, bibImage);
+    ctx.globalAlpha = 1;
     ctx.save();
-    ctx.globalCompositeOperation = 'destination-in';
+    ctx.globalCompositeOperation = 'destination-out';
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     if (flip) {
@@ -336,6 +338,9 @@ function renderFrame() {
     ctx.drawImage(segKeepCanvas, 0, 0, canvas.width, canvas.height);
     ctx.restore();
   }
+
+  drawBib(ctx, drawFit, state.product, state.adjust.opacity * appearRamp, bibImage);
+  if (mask) eraseMaskArea(ctx, mask);
 }
 
 function resetTracking() {

@@ -144,6 +144,43 @@ function renderBibLayer(image, width, height, yaw) {
   return { layer, layerH };
 }
 
+// ── 칼라 뒤판 (v27) ─────────────────────────────────────────
+// 실물 롤링빕은 목 뒤까지 360° 연결된다(착용컷 뒷모습 확인). 뒤판을 먼저
+// 그리고 '사람 영역'을 뚫으면, 어깨 위·목 옆 배경에만 뒤판이 남아
+// 몸이 칼라 앞뒤 사이에 낀 실물 구조가 재현된다.
+const BACK_SCALE = 0.96; // 뒤판은 약간 멀리 = 약간 작게
+const BACK_LIFT = 0.24; // 앞판 대비 위로 (목 뒤에서 넘어오는 높이, 높이 비율)
+const BACK_DIM = 0.13; // 뒤판은 그늘져 살짝 어둡게
+
+let backLayerCanvas = null;
+let backLayerSrc = null;
+
+export function drawBibBack(ctx, fit, image) {
+  if (!(image?.complete && image.naturalWidth > 0)) return;
+  if (backLayerSrc !== image.src) {
+    // 어둡게 처리한 뒤판 원본을 1회 베이크
+    backLayerCanvas = document.createElement('canvas');
+    backLayerCanvas.width = image.naturalWidth;
+    backLayerCanvas.height = image.naturalHeight;
+    const b = backLayerCanvas.getContext('2d');
+    b.drawImage(image, 0, 0);
+    b.globalCompositeOperation = 'source-atop';
+    b.fillStyle = `rgba(30, 22, 18, ${BACK_DIM})`;
+    b.fillRect(0, 0, backLayerCanvas.width, backLayerCanvas.height);
+    backLayerSrc = image.src;
+  }
+  const w = fit.width * BACK_SCALE;
+  const h = fit.height * BACK_SCALE;
+  ctx.save();
+  ctx.translate(fit.x, fit.y - fit.height * BACK_LIFT);
+  ctx.rotate(fit.rotation);
+  ctx.globalAlpha = ctx.globalAlpha; // 호출부 알파 유지
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(backLayerCanvas, -w / 2, -h / 2, w, h);
+  ctx.restore();
+}
+
 // 턱받이 본체 그리기 — 원본 실루엣·비율 유지 + 접촉 그림자
 export function drawBib(ctx, fit, product, opacity, image) {
   ctx.save();
