@@ -70,13 +70,17 @@ function drawFallbackShape(ctx, fit, product) {
 // 원단이 좁고 짧아 보이고, 좌우 날개 끝은 몸 곡면을 따라 살짝 어두워진다.
 const PERSPECTIVE_MAX = 0.24; // |yaw|=1에서 근/원측 세로 스케일 차
 const PERSPECTIVE_SLICES = 32;
+// 칼라 아치: 바깥 스트립일수록 위로 올라가는 완만한 곡선(실물 착용컷에서
+// 어깨 위 원단이 목을 향해 휘어 오르는 형태). 스트립별 '세로 이동'만 하므로
+// 세로선·로고·도트 간격은 보존된다 — v14 메시 왜곡과 다름.
+const COLLAR_CURVE = 0.12; // 날개 끝이 올라가는 높이 (턱받이 높이 비율)
 const EDGE_SHADE_BASE = 0.04; // 가장자리 기본 음영 — 화사한 인상을 위해 얕게
 
 let bibLayerCanvas = null;
 
 function renderBibLayer(image, width, height, yaw) {
   const p = Math.max(-1, Math.min(1, yaw || 0)) * PERSPECTIVE_MAX;
-  const pad = Math.ceil((height * Math.abs(p)) / 2) + 2;
+  const pad = Math.ceil(height * (Math.abs(p) / 2 + COLLAR_CURVE)) + 2;
   const layerW = Math.max(2, Math.ceil(width));
   const layerH = Math.max(2, Math.ceil(height + pad * 2));
 
@@ -99,10 +103,11 @@ function renderBibLayer(image, width, height, yaw) {
     const k = 1 - p * t; // 선형 스케일 — 대칭이라 총폭은 width 그대로 유지
     const dw = (width / n) * k;
     const dh = height * k;
+    const arc = -COLLAR_CURVE * height * (4 * t * t); // 가장자리에서 위로
     lctx.drawImage(
       image,
       i * srcSliceW, 0, srcSliceW, image.naturalHeight,
-      x, (layerH - dh) / 2, dw + 0.6, dh, // +0.6px: 슬라이스 사이 심 갭 방지
+      x, (layerH - dh) / 2 + arc, dw + 0.6, dh, // +0.6px: 심 갭 방지
     );
     x += dw;
   }
