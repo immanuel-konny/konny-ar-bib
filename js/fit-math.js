@@ -211,7 +211,7 @@ export function faceToFit(landmarks, videoWidth, videoHeight, mirrored) {
 }
 
 // 얼굴 윤곽 → 가림 마스크 폴리곤 (턱·목이 턱받이 앞에 보이도록)
-export function faceOcclusionMask(landmarks, videoWidth, videoHeight, mirrored) {
+export function faceOcclusionMask(landmarks, videoWidth, videoHeight, mirrored, neckBottomLimit = Infinity) {
   if (!landmarks[10] || !landmarks[152] || !landmarks[234] || !landmarks[454]) {
     return null;
   }
@@ -230,13 +230,22 @@ export function faceOcclusionMask(landmarks, videoWidth, videoHeight, mirrored) 
   const earL = toPixel(landmarks[234], videoWidth, videoHeight, mirrored);
   const earR = toPixel(landmarks[454], videoWidth, videoHeight, mirrored);
   const earDist = Math.hypot(earR.x - earL.x, earR.y - earL.y);
-  const neckDepth = earDist * 0.5;
-  const taper = 0.25; // 아래로 갈수록 목이 좁아지는 정도
+  // 깊이는 해부학 추정(귀간격 0.5)과 "턱받이 상단+30%" 중 얕은 쪽 —
+  // 고정 깊이만 쓰면 원단이 목 밑동에 앉는 성인 구도에서 기둥이 앞섶까지
+  // 관통한다(2026-08-20 PC 캡처). 바닥은 완만한 U자로, 실물 칼라의
+  // 목선 파임처럼 보이게 한다.
+  const neckBottom = Math.min(chin.y + earDist * 0.5, neckBottomLimit);
+  if (neckBottom <= chin.y + earDist * 0.08) {
+    return { oval, neck: [] }; // 원단이 턱 바로 아래면 목 지움 불필요
+  }
+  const taper = 0.3;
+  const sideY = chin.y + (neckBottom - chin.y) * 0.8;
   const neck = [
     { x: jawL.x, y: jawL.y },
     { x: jawR.x, y: jawR.y },
-    { x: jawR.x + (chin.x - jawR.x) * taper, y: chin.y + neckDepth },
-    { x: jawL.x + (chin.x - jawL.x) * taper, y: chin.y + neckDepth },
+    { x: jawR.x + (chin.x - jawR.x) * taper, y: sideY },
+    { x: chin.x, y: neckBottom },
+    { x: jawL.x + (chin.x - jawL.x) * taper, y: sideY },
   ];
 
   // 퇴화된 랜드마크(점들이 한곳에 뭉친 경우 등)로 만들어진 마스크는

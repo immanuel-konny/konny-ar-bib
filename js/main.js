@@ -32,7 +32,7 @@ import { SEG_MODEL_LITE_URL } from './config.js';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v23';
+const APP_VERSION = 'v24';
 
 const $ = (id) => document.getElementById(id);
 
@@ -611,8 +611,14 @@ function loop() {
         if (window.__vtoFailFace) throw new Error('forced face failure (test hook)');
         const landmarks = faceLandmarker.detectForVideo(input, now).faceLandmarks?.[0];
         const fit = landmarks ? faceToFit(landmarks, vw, vh, state.mirrored) : null;
+        // 목 지움 바닥 한계 = 그려질 턱받이 상단 + 높이 30% (직전 프레임 기준)
+        let neckLimit = Infinity;
+        if (renderedFit) {
+          const rf = withAdjust(renderedFit);
+          neckLimit = rf.y - rf.height / 2 + rf.height * 0.3;
+        }
         const nextMask = landmarks
-          ? faceOcclusionMask(landmarks, vw, vh, state.mirrored)
+          ? faceOcclusionMask(landmarks, vw, vh, state.mirrored, neckLimit)
           : null;
         if (fit) {
           lastFace = { fit, ts: now };
@@ -941,7 +947,7 @@ async function analyzePhoto(img) {
       ? faceToFit(faceLandmarks, img.naturalWidth, img.naturalHeight, false)
       : null;
     const photoMask = faceLandmarks
-      ? faceOcclusionMask(faceLandmarks, img.naturalWidth, img.naturalHeight, false)
+      ? faceOcclusionMask(faceLandmarks, img.naturalWidth, img.naturalHeight, false, Infinity)
       : null;
     if (photoMask) {
       mask = photoMask;
