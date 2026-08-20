@@ -8,7 +8,7 @@ import {
   DETECT,
   MOBILE_QUERY,
   STATUS_MESSAGES,
-} from './config.js?v32';
+} from './config.js?v33';
 import {
   poseToFit,
   faceToFit,
@@ -20,19 +20,19 @@ import {
   isPlausibleFit,
   applyFusionOffset,
   measureFusionOffset,
-} from './fit-math.js?v32';
-import { applyStopLock, smoothTimed } from './stabilizer.js?v32';
+} from './fit-math.js?v33';
+import { applyStopLock, smoothTimed } from './stabilizer.js?v33';
 import {
   drawBib,
   eraseMaskArea,
   drawBeautyLight,
-} from './renderer.js?v32';
-import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v32';
-import { SEG_MODEL_LITE_URL } from './config.js?v32';
+} from './renderer.js?v33';
+import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v33';
+import { SEG_MODEL_LITE_URL } from './config.js?v33';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v32';
+const APP_VERSION = 'v33';
 
 const $ = (id) => document.getElementById(id);
 
@@ -144,6 +144,11 @@ let segSwapping = false;
 let swayYaw = 0; // 이동 관성 스웨이 (속도 반응 원근)
 let prevRenderX = null;
 let prevRenderTs = 0;
+// 찰랑거림(v33): 진자 스윙(목 축, 감쇠 스프링) + 밑단 리플 (모두 속도 반응)
+let swingA = 0; // 스윙 각 (rad)
+let swingV = 0;
+let rippleAmp = 0;
+let ripplePhase = 0;
 let lastSegRunTs = 0;
 
 // 얼굴 엔진만 GPU에서 실패하는 기기 대응. 예외를 던지는 경우뿐 아니라
@@ -315,6 +320,28 @@ function renderFrame() {
   const drawFit = withAdjust(renderedFit);
   drawFit.yaw = Math.max(-1, Math.min(1, drawFit.yaw + swayYaw));
 
+  // 진자 스윙: 좌우 이동을 입력으로 목(상단 중앙)을 축 삼아 흔들리고 감쇠 복원.
+  // 회전+미소 평행이동뿐이라 실루엣은 보존된다.
+  {
+    const dtS = Math.min(0.05, Math.max(0.008, (nowRender - prevRenderTs) / 1000)) || 0.016;
+    const vx = prevRenderX !== null ? ((renderedFit.x - prevRenderX) / Math.max(8, nowRender - prevRenderTs)) * 1000 : 0;
+    const force = Math.max(-3, Math.min(3, -vx * 0.011));
+    swingV += (-42 * swingA - 7 * swingV + force) * dtS;
+    swingA += swingV * dtS;
+    swingA = Math.max(-0.09, Math.min(0.09, swingA));
+    drawFit.rotation += swingA;
+    drawFit.x -= (drawFit.height / 2) * swingA; // 목 축 회전 보정 (소각 근사)
+
+    // 밑단 리플: 속도가 있을 때만 출렁이고 정지 시 0으로 감쇠
+    const speed = Math.abs(vx) + Math.abs(swingV) * 400;
+    const targetAmp = Math.min(0.035, speed * 0.00011);
+    rippleAmp += (targetAmp - rippleAmp) * Math.min(1, dtS * 6);
+    ripplePhase += dtS * (7 + speed * 0.02);
+    drawFit.rippleAmp = rippleAmp;
+    drawFit.ripplePhase = ripplePhase;
+    drawFit.sheenShift = swingA * 1.6; // 스윙에 맞춰 광 띠가 함께 흐름
+  }
+
   // 뒤판 레이어는 v30에서 제거 — 이중 스캘럽 테두리 아티팩트(사용자 확인).
   // Spark 레퍼런스의 목 옆 모습은 평면 이미지 + 높은 배치 + 얼굴 가림만으로
   // 만들어진다. 단순함이 정답.
@@ -345,6 +372,9 @@ function resetTracking() {
   lastSegRunTs = 0;
   swayYaw = 0;
   prevRenderX = null;
+  swingA = 0;
+  swingV = 0;
+  rippleAmp = 0;
 }
 
 // ── 엔진 준비 ─────────────────────────────────────────────────

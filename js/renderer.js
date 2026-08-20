@@ -78,15 +78,15 @@ const EDGE_SHADE_BASE = 0.04; // 가장자리 기본 음영 — 화사한 인상
 // 동적 조명(v32): 고정 가상 광원(정면 상단) 기준. 몸 방향(yaw)·기울기(roll)에
 // 따라 원단 위 명암과 시인(sheen) 밴드가 이동해 "빛이 원단을 스치는" 느낌을 낸다.
 // 코튼은 광택이 낮으므로 전부 은은하게 — 정지 정면에서는 거의 중립.
-const LIGHT_DIFFUSE_DARK = 0.10; // |yaw|=1에서 먼 쪽 최대 음영
-const LIGHT_DIFFUSE_BRIGHT = 0.06; // 가까운 쪽 최대 밝기
-const LIGHT_SHEEN_ALPHA = 0.055; // 시인 밴드 밝기
-const LIGHT_SHEEN_TRAVEL = 0.3; // yaw에 따른 밴드 이동 거리 (폭 비율)
-const LIGHT_TOP_AMBIENT = 0.035; // 천장광: 상단 은은한 밝기
+const LIGHT_DIFFUSE_DARK = 0.17; // |yaw|=1에서 먼 쪽 최대 음영
+const LIGHT_DIFFUSE_BRIGHT = 0.11; // 가까운 쪽 최대 밝기
+const LIGHT_SHEEN_ALPHA = 0.10; // 시인 밴드 밝기 (v32 5.5%는 비가시 — 상향)
+const LIGHT_SHEEN_TRAVEL = 0.34; // yaw에 따른 밴드 이동 거리 (폭 비율)
+const LIGHT_TOP_AMBIENT = 0.06; // 천장광: 정면 정지에서도 인지되는 상단 광
 
 const bibLayerCache = {}; // 앞판/뒤판이 각자의 오프스크린을 사용
 
-function renderBibLayer(image, width, height, yaw, cacheKey = 'front', roll = 0) {
+function renderBibLayer(image, width, height, yaw, cacheKey = 'front', roll = 0, rippleAmp = 0, ripplePhase = 0, sheenShift = 0) {
   const p = Math.max(-1, Math.min(1, yaw || 0)) * PERSPECTIVE_MAX;
   const pad = Math.ceil(height * (Math.abs(p) / 2 + COLLAR_CURVE)) + 2;
   const layerW = Math.max(2, Math.ceil(width));
@@ -113,10 +113,13 @@ function renderBibLayer(image, width, height, yaw, cacheKey = 'front', roll = 0)
     const k = 1 - p * t; // 선형 스케일 — 대칭이라 총폭은 width 그대로 유지
     const dw = (width / n) * k;
     const dh = height * k;
+    // 밑단 리플: 상단은 고정, 스트립 높이만 파동으로 ±3.5% — 천이 출렁이는 느낌.
+    // 속도 반응형(정지 시 0)이라 정적 톱니 문제(v31에서 제거한 아치)와 무관.
+    const rip = rippleAmp * Math.sin(ripplePhase + (i / n) * Math.PI * 2.3);
     lctx.drawImage(
       image,
       i * srcSliceW, 0, srcSliceW, srcH,
-      x, (layerH - dh) / 2, dw + 0.6, dh, // +0.6px: 심 갭 방지
+      x, (layerH - dh) / 2, dw + 0.6, dh * (1 + rip), // +0.6px: 심 갭 방지
     );
     x += dw;
   }
@@ -176,7 +179,7 @@ function renderBibLayer(image, width, height, yaw, cacheKey = 'front', roll = 0)
   }
 
   // ② 시인 밴드: 움직임(yaw·스웨이)에 따라 원단 위를 미끄러지는 부드러운 광
-  const bandX = cxL - ly * layerW * LIGHT_SHEEN_TRAVEL;
+  const bandX = cxL - (ly * LIGHT_SHEEN_TRAVEL + sheenShift) * layerW;
   const bandW = layerW * 0.30;
   const gs = lctx.createLinearGradient(
     bandX - bandW - dirY * 0, cyL - 0, bandX + bandW, cyL,
@@ -254,7 +257,10 @@ export function drawBib(ctx, fit, product, opacity, image) {
   ctx.globalAlpha = opacity * fit.confidence;
 
   if (image?.complete && image.naturalWidth > 0) {
-    const { layer, layerH } = renderBibLayer(image, fit.width, fit.height, fit.yaw, 'front', fit.rotation);
+    const { layer, layerH } = renderBibLayer(
+      image, fit.width, fit.height, fit.yaw, 'front', fit.rotation,
+      fit.rippleAmp ?? 0, fit.ripplePhase ?? 0, fit.sheenShift ?? 0,
+    );
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(layer, -fit.width / 2, -layerH / 2, fit.width, layerH);
