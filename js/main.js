@@ -8,7 +8,7 @@ import {
   DETECT,
   MOBILE_QUERY,
   STATUS_MESSAGES,
-} from './config.js?v40';
+} from './config.js?v41';
 import {
   poseToFit,
   faceToFit,
@@ -20,19 +20,19 @@ import {
   isPlausibleFit,
   applyFusionOffset,
   measureFusionOffset,
-} from './fit-math.js?v40';
-import { applyStopLock, smoothTimed } from './stabilizer.js?v40';
+} from './fit-math.js?v41';
+import { applyStopLock, smoothTimed } from './stabilizer.js?v41';
 import {
   drawBib,
   eraseMaskArea,
   drawBeautyLight,
-} from './renderer.js?v40';
-import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v40';
-import { SEG_MODEL_LITE_URL } from './config.js?v40';
+} from './renderer.js?v41';
+import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v41';
+import { SEG_MODEL_LITE_URL } from './config.js?v41';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v40';
+const APP_VERSION = 'v41';
 
 const $ = (id) => document.getElementById(id);
 
@@ -86,9 +86,9 @@ const state = {
   fx: { light: 1, angle: -35, flutter: 1, bright: 1, sat: 1 }, // 표현 조정
   product: PRODUCTS[0],
 };
-// 기본값은 사용자가 슬라이더로 확정한 세팅 (2026-08-20): 조명 160%/정면 위,
-// 채도 135%, 찰랑거림 200% — 모바일(패널 없음)에도 동일 적용된다.
-const FX_DEFAULTS = { light: 1.6, angle: 0, flutter: 2, bright: 1, sat: 1.35 };
+// 기본값은 사용자가 슬라이더로 확정한 세팅 (2026-08-21, 그림자·기모 반영 후):
+// 조명 135%/왼쪽 25°, 채도 100%, 찰랑거림 25% — 모바일(패널 없음)에도 동일 적용.
+const FX_DEFAULTS = { light: 1.35, angle: -25, flutter: 0.25, bright: 1, sat: 1 };
 
 // ── 추적 내부 상태 ─────────────────────────────────────────────
 let poseLandmarker = null;
@@ -1249,9 +1249,9 @@ function init() {
     renderFrame();
   };
   const litFiles = {
-    left: './assets/konny-bib-lit-left.webp?v40',
-    top: './assets/konny-bib-lit-top.webp?v40',
-    right: './assets/konny-bib-lit-right.webp?v40',
+    left: './assets/konny-bib-lit-left.webp?v41',
+    top: './assets/konny-bib-lit-top.webp?v41',
+    right: './assets/konny-bib-lit-right.webp?v41',
   };
   const litImgs = {};
   let litLeft = Object.keys(litFiles).length;

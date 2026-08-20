@@ -1,7 +1,7 @@
 // 랜드마크 → 착용 핏 계산 (v15 알고리즘 이식)
 // fit = { x, y, width, height, rotation, yaw, pitch, confidence } (픽셀 좌표계)
 
-import { BIB_ASPECT, FACE_OVAL } from './config.js?v40';
+import { BIB_ASPECT, FACE_OVAL } from './config.js?v41';
 
 export const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
