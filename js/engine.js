@@ -68,11 +68,11 @@ export async function createFaceLandmarker(preferredDelegate = 'GPU') {
 }
 
 // 인물 세그멘터 — 배경·머리카락 정밀 가림용. 실패하면 null (기능만 비활성).
-export async function createImageSegmenter(preferredDelegate = 'GPU') {
+export async function createImageSegmenter(preferredDelegate = 'GPU', modelUrl = SEG_MODEL_URL) {
   const vision = await loadVisionModule();
   const fileset = await loadFileset();
   const options = (delegate) => ({
-    baseOptions: { modelAssetPath: SEG_MODEL_URL, delegate },
+    baseOptions: { modelAssetPath: modelUrl, delegate },
     runningMode: 'VIDEO',
     // 카테고리 마스크는 일부 기기 GPU에서 깨진 버퍼를 반환한다(실기기에서
     // 블록 노이즈로 확인됨). float 컨피던스 마스크는 델리게이트와 무관하게

@@ -24,6 +24,9 @@ export const FACE_MODEL_URL =
 // 셀피 멀티클래스 세그멘테이션 (0 배경 / 1 머리카락 / 2 몸피부 / 3 얼굴피부 / 4 옷 / 5 기타)
 export const SEG_MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite';
+// 경량 바이너리(사람/배경) 모델 — 멀티클래스가 느린 기기용 자동 강등 대상
+export const SEG_MODEL_LITE_URL =
+  'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite';
 export const VISION_VERSION = '0.10.35';
 export const WASM_BASE_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/wasm`;
 export const VISION_BUNDLE_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/vision_bundle.mjs`;

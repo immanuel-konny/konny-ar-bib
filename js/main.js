@@ -28,10 +28,11 @@ import {
   drawBeautyLight,
 } from './renderer.js';
 import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js';
+import { SEG_MODEL_LITE_URL } from './config.js';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v20';
+const APP_VERSION = 'v21';
 
 const $ = (id) => document.getElementById(id);
 
@@ -138,6 +139,11 @@ let segInputCanvas = null; // 전용 320px 입력 (감지 입력과 분리해 �
 let segKeepCanvas = null; // alpha=유지 영역(사람∧¬머리카락∧¬얼굴피부)
 let segKeepTs = 0;
 let segCostAvg = 0; // CPU 추론 시간 이동평균(ms) — 저사양 기기 자동 조절용
+let segTier = 'multi'; // 'multi'(멀티클래스: 머리카락 채널) | 'lite'(바이너리: 경량)
+let segSwapping = false;
+let swayYaw = 0; // 이동 관성 스웨이 (속도 반응 원근)
+let prevRenderX = null;
+let prevRenderTs = 0;
 let lastSegRunTs = 0;
 
 // 얼굴 엔진만 GPU에서 실패하는 기기 대응. 예외를 던지는 경우뿐 아니라
@@ -186,7 +192,7 @@ function updateHud(now) {
   hudEl.textContent = [
     `${APP_VERSION} mode:${state.mode} status:${state.status} fps:${diag.fps}`,
     `engine:${diag.engine} delegate:${delegatePref} input:${analyzeMode} stage:${stageIndex}${hasEverDetected ? '*' : ''}`,
-    `video:${v?.videoWidth ?? 0}x${v?.videoHeight ?? 0} mobile:${isMobileSession} seg:${segDisabled ? 'off' : segmenter ? `on ${diag.segRuns}r e${diag.segErrors} ${diag.segCost ?? 0}ms` : '-'}`,
+    `video:${v?.videoWidth ?? 0}x${v?.videoHeight ?? 0} mobile:${isMobileSession} seg:${segDisabled ? 'off' : segmenter ? `${segTier} ${diag.segRuns}r e${diag.segErrors} ${diag.segCost ?? 0}ms` : '-'}`,
     `pose:${diag.poseHits}/${diag.poseRuns} e${diag.poseErrors} face:${diag.faceHits}/${diag.faceRuns} e${diag.faceErrors}${faceForcedCpu ? ' faceCPU' : ''}`,
     `fit:${renderedFit ? `${Math.round(renderedFit.x)},${Math.round(renderedFit.y)} w${Math.round(renderedFit.width)}` : '-'} mask:${mask ? 'y' : 'n'}`,
     diag.lastError ? `err:${String(diag.lastError).replace(/\s+/g, ' ').slice(0, 72)}` : '',
@@ -295,13 +301,21 @@ function renderFrame() {
   const appearRamp = appearTs
     ? Math.min(1, (performance.now() - appearTs) / 350)
     : 1;
-  drawBib(
-    ctx,
-    withAdjust(renderedFit),
-    state.product,
-    state.adjust.opacity * appearRamp,
-    bibImage,
-  );
+  // 이동 관성 스웨이: 좌우로 움직일 때 뒤따르는 쪽 원단이 살짝 눕는다.
+  // 기존 스트립 원근에 속도 항만 더하므로 직선 보존(로고 안전)은 유지된다.
+  const nowRender = performance.now();
+  if (prevRenderX !== null) {
+    const dtMs = Math.max(8, nowRender - prevRenderTs);
+    const vx = ((renderedFit.x - prevRenderX) / dtMs) * 1000; // px/s
+    const target = Math.max(-0.2, Math.min(0.2, -vx * 0.0005));
+    swayYaw += (target - swayYaw) * Math.min(1, dtMs / 200);
+  }
+  prevRenderX = renderedFit.x;
+  prevRenderTs = nowRender;
+
+  const drawFit = withAdjust(renderedFit);
+  drawFit.yaw = Math.max(-1, Math.min(1, drawFit.yaw + swayYaw));
+  drawBib(ctx, drawFit, state.product, state.adjust.opacity * appearRamp, bibImage);
   if (mask) eraseMaskArea(ctx, mask);
 
   // 인물 세그멘테이션 클리핑: 몸 실루엣 밖(배경)과 머리카락 위의 턱받이 픽셀 제거.
@@ -344,6 +358,8 @@ function resetTracking() {
   faceMissStreak = 0;
   segKeepTs = 0;
   lastSegRunTs = 0;
+  swayYaw = 0;
+  prevRenderX = null;
 }
 
 // ── 엔진 준비 ─────────────────────────────────────────────────
@@ -398,7 +414,7 @@ function segSource(video) {
 // 피부 제거는 목 구역에 한정 — 전신 피부 제거 시 원단이 통째로 사라질 수 있음)
 // 목 구역 피부 지우기는 v20에서 제거됨 — 사각 클립 경계가 원단에 직선 노치를
 // 만들었다(PC 캡처 확인). 목 노출은 v19 적응형 앵커(턱+어깨 블렌드)가 담당한다.
-function updateSegKeep(bgProb, hairProb, faceSkinProb, w, h, ts) {
+function updateSegKeep(bgProb, hairProb, w, h, ts) {
   segKeepCanvas ??= document.createElement('canvas');
   if (segKeepCanvas.width !== w || segKeepCanvas.height !== h) {
     segKeepCanvas.width = w;
@@ -409,8 +425,9 @@ function updateSegKeep(bgProb, hairProb, faceSkinProb, w, h, ts) {
   const px = img.data;
   let kept = 0;
   for (let i = 0; i < bgProb.length; i++) {
-    const remove =
-      bgProb[i] + (hairProb ? hairProb[i] : 0) + (faceSkinProb ? faceSkinProb[i] : 0);
+    // 배경+머리카락만 제거. 얼굴피부 채널은 맨살 목·가슴을 오분류해
+    // 원단을 침식했다(2026-08-20 영상) — 얼굴은 랜드마크 오벌 마스크가 담당.
+    const remove = bgProb[i] + (hairProb ? hairProb[i] : 0);
     let a = 0;
     if (remove <= 0.35) a = 255;
     else if (remove < 0.6) a = Math.round(((0.6 - remove) / 0.25) * 255);
@@ -619,7 +636,7 @@ function loop() {
 
     const segInterval = Math.max(DETECT.segIntervalMs, segCostAvg * 3.5);
     if (
-      segmenter && !segDisabled && !faceDue &&
+      segmenter && !segDisabled && !segSwapping && !faceDue &&
       state.mode === 'camera' &&
       now - lastSegRunTs >= segInterval
     ) {
@@ -633,7 +650,28 @@ function loop() {
         diag.segCost = Math.round(segCostAvg);
         // 저사양 기기 자동 조절: 추론이 느리면 주기가 늘고(아래 segInterval),
         // 매우 느리면 끈다. (저사양 PC에서 1회 300ms+가 fps를 2로 떨어뜨림)
-        if (segCostAvg > 300 && diag.segRuns > 3) {
+        if (segCostAvg > 250 && diag.segRuns > 2 && segTier === 'multi' && !segSwapping) {
+          // 멀티클래스가 느린 기기: 끄지 말고 경량 바이너리로 강등
+          // (머리카락 채널은 잃지만 몸 실루엣 클리핑은 유지)
+          segSwapping = true;
+          const slowMs = Math.round(segCostAvg);
+          (async () => {
+            try {
+              const lite = await createImageSegmenter('CPU', SEG_MODEL_LITE_URL);
+              try { segmenter?.close(); } catch { /* 무시 */ }
+              segmenter = lite;
+              segTier = 'lite';
+              segCostAvg = 0;
+              console.warn('[ar] segmenter downgraded to lite (multi ' + slowMs + 'ms)');
+            } catch {
+              segDisabled = true;
+              segmenter = null;
+              segKeepTs = 0;
+            } finally {
+              segSwapping = false;
+            }
+          })();
+        } else if (segCostAvg > 300 && diag.segRuns > 3 && segTier === 'lite') {
           segDisabled = true;
           try { segmenter.close(); } catch { /* 무시 */ }
           segmenter = null;
@@ -645,8 +683,7 @@ function loop() {
           const bg = masks[0];
           const ok = updateSegKeep(
             bg.getAsFloat32Array(),
-            masks.length > 1 ? masks[1].getAsFloat32Array() : null,
-            masks.length > 3 ? masks[3].getAsFloat32Array() : null,
+            segTier === 'multi' && masks.length > 1 ? masks[1].getAsFloat32Array() : null,
             bg.width,
             bg.height,
             now,
@@ -916,8 +953,7 @@ async function analyzePhoto(img) {
           const bg = masks[0];
           updateSegKeep(
             bg.getAsFloat32Array(),
-            masks.length > 1 ? masks[1].getAsFloat32Array() : null,
-            masks.length > 3 ? masks[3].getAsFloat32Array() : null,
+            segTier === 'multi' && masks.length > 1 ? masks[1].getAsFloat32Array() : null,
             bg.width,
             bg.height,
             Number.POSITIVE_INFINITY,

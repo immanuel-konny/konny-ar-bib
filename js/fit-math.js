@@ -76,10 +76,15 @@ export function fuseFits(pose, face) {
   const width = pose.width * 0.15 + face.width * 0.85;
   return {
     x: pose.x * 0.55 + face.x * 0.45,
-    // y: 턱 60% + 어깨 40% — 어깨선은 실제 쇄골/목 밑동 위치라서
-    // 아기(목 짧음)든 성인(목 긺)이든 원단이 목 밑동에 자동 정렬된다.
-    // 턱 100%(v12~v18)는 성인 목에서 원단이 인후를 덮는 문제를 만들었다.
-    y: face.y * 0.6 + pose.y * 0.4,
+    // y: 턱 60% + 어깨 40% 블렌드 후 턱 기준 창으로 클램프.
+    // 어깨선은 목 길이에 자동 적응하지만, 폰을 낮게 들면 어깨가 깊어져
+    // 원단이 가슴까지 처지는 사례(2026-08-20 영상) — 창이 양방향 한계를 보장:
+    // 위로는 인후를 덮지 않고, 아래로는 목 밑동에서 크게 떨어지지 않는다.
+    y: clamp(
+      face.y * 0.6 + pose.y * 0.4,
+      face.y - face.height * 0.06,
+      face.y + face.height * 0.42,
+    ),
     width,
     height: width * BIB_ASPECT,
     rotation: pose.rotation * 0.7 + face.rotation * 0.3,

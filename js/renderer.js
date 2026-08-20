@@ -70,7 +70,7 @@ function drawFallbackShape(ctx, fit, product) {
 // 원단이 좁고 짧아 보이고, 좌우 날개 끝은 몸 곡면을 따라 살짝 어두워진다.
 const PERSPECTIVE_MAX = 0.24; // |yaw|=1에서 근/원측 세로 스케일 차
 const PERSPECTIVE_SLICES = 32;
-const EDGE_SHADE_BASE = 0.065; // 가장자리 기본 음영 (정면에서도 은은히)
+const EDGE_SHADE_BASE = 0.04; // 가장자리 기본 음영 — 화사한 인상을 위해 얕게
 
 let bibLayerCanvas = null;
 
@@ -129,8 +129,8 @@ function renderBibLayer(image, width, height, yaw) {
     layerW / 2, top + height * 0.10, width * 0.03,
     layerW / 2, top + height * 0.10, width * 0.26,
   );
-  chinShadow.addColorStop(0, 'rgba(45, 32, 26, 0.16)');
-  chinShadow.addColorStop(0.55, 'rgba(45, 32, 26, 0.06)');
+  chinShadow.addColorStop(0, 'rgba(45, 32, 26, 0.09)');
+  chinShadow.addColorStop(0.55, 'rgba(45, 32, 26, 0.035)');
   chinShadow.addColorStop(1, 'rgba(45, 32, 26, 0)');
   lctx.fillStyle = chinShadow;
   lctx.fillRect(0, 0, layerW, layerH);
