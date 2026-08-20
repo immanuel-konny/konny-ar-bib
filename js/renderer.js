@@ -70,10 +70,10 @@ function drawFallbackShape(ctx, fit, product) {
 // 원단이 좁고 짧아 보이고, 좌우 날개 끝은 몸 곡면을 따라 살짝 어두워진다.
 const PERSPECTIVE_MAX = 0.24; // |yaw|=1에서 근/원측 세로 스케일 차
 const PERSPECTIVE_SLICES = 32;
-// 칼라 아치: 바깥 스트립일수록 위로 올라가는 완만한 곡선(실물 착용컷에서
-// 어깨 위 원단이 목을 향해 휘어 오르는 형태). 스트립별 '세로 이동'만 하므로
-// 세로선·로고·도트 간격은 보존된다 — v14 메시 왜곡과 다름.
-const COLLAR_CURVE = 0.12; // 날개 끝이 올라가는 높이 (턱받이 높이 비율)
+// 칼라 아치는 v31에서 제거 — 스트립 계단(톱니) 절단면이 원본 실루엣을
+// 훼손했다(사용자 확인). 원본 그대로가 정답. 접히는 입체감은 3D 메시의
+// 영역(Spark)이므로 2D에서 흉내내지 않는다.
+const COLLAR_CURVE = 0;
 const EDGE_SHADE_BASE = 0.04; // 가장자리 기본 음영 — 화사한 인상을 위해 얕게
 
 const bibLayerCache = {}; // 앞판/뒤판이 각자의 오프스크린을 사용
@@ -105,11 +105,10 @@ function renderBibLayer(image, width, height, yaw, cacheKey = 'front') {
     const k = 1 - p * t; // 선형 스케일 — 대칭이라 총폭은 width 그대로 유지
     const dw = (width / n) * k;
     const dh = height * k;
-    const arc = -COLLAR_CURVE * height * (4 * t * t); // 가장자리에서 위로
     lctx.drawImage(
       image,
       i * srcSliceW, 0, srcSliceW, srcH,
-      x, (layerH - dh) / 2 + arc, dw + 0.6, dh, // +0.6px: 심 갭 방지
+      x, (layerH - dh) / 2, dw + 0.6, dh, // +0.6px: 심 갭 방지
     );
     x += dw;
   }
