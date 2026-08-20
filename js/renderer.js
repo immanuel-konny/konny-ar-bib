@@ -75,10 +75,18 @@ const PERSPECTIVE_SLICES = 32;
 // 영역(Spark)이므로 2D에서 흉내내지 않는다.
 const COLLAR_CURVE = 0;
 const EDGE_SHADE_BASE = 0.04; // 가장자리 기본 음영 — 화사한 인상을 위해 얕게
+// 동적 조명(v32): 고정 가상 광원(정면 상단) 기준. 몸 방향(yaw)·기울기(roll)에
+// 따라 원단 위 명암과 시인(sheen) 밴드가 이동해 "빛이 원단을 스치는" 느낌을 낸다.
+// 코튼은 광택이 낮으므로 전부 은은하게 — 정지 정면에서는 거의 중립.
+const LIGHT_DIFFUSE_DARK = 0.10; // |yaw|=1에서 먼 쪽 최대 음영
+const LIGHT_DIFFUSE_BRIGHT = 0.06; // 가까운 쪽 최대 밝기
+const LIGHT_SHEEN_ALPHA = 0.055; // 시인 밴드 밝기
+const LIGHT_SHEEN_TRAVEL = 0.3; // yaw에 따른 밴드 이동 거리 (폭 비율)
+const LIGHT_TOP_AMBIENT = 0.035; // 천장광: 상단 은은한 밝기
 
 const bibLayerCache = {}; // 앞판/뒤판이 각자의 오프스크린을 사용
 
-function renderBibLayer(image, width, height, yaw, cacheKey = 'front') {
+function renderBibLayer(image, width, height, yaw, cacheKey = 'front', roll = 0) {
   const p = Math.max(-1, Math.min(1, yaw || 0)) * PERSPECTIVE_MAX;
   const pad = Math.ceil(height * (Math.abs(p) / 2 + COLLAR_CURVE)) + 2;
   const layerW = Math.max(2, Math.ceil(width));
@@ -140,6 +148,52 @@ function renderBibLayer(image, width, height, yaw, cacheKey = 'front') {
   chinShadow.addColorStop(1, 'rgba(45, 32, 26, 0)');
   lctx.fillStyle = chinShadow;
   lctx.fillRect(0, 0, layerW, layerH);
+
+  // ── 동적 조명 (v32) — 원단 픽셀 위에만(source-atop 유지 상태) ──
+  const ly = Math.max(-1, Math.min(1, yaw || 0));
+  // 광원은 월드 고정: 원단이 roll로 기울면 그라데이션은 반대로 기울어 보정
+  const dirX = Math.cos(-roll);
+  const dirY = Math.sin(-roll);
+  const cxL = layerW / 2;
+  const cyL = layerH / 2;
+  const R = layerW / 2;
+
+  // ① 확산 음영: 몸이 돌면 광원 반대쪽(먼 쪽)이 어두워지고 가까운 쪽이 밝아짐
+  if (Math.abs(ly) > 0.02) {
+    const dark = LIGHT_DIFFUSE_DARK * Math.abs(ly);
+    const bright = LIGHT_DIFFUSE_BRIGHT * Math.abs(ly);
+    const sgn = ly >= 0 ? 1 : -1; // yaw>0 → 오른쪽이 멀어짐(어둡게)
+    const gd = lctx.createLinearGradient(
+      cxL - sgn * dirX * R, cyL - sgn * dirY * R,
+      cxL + sgn * dirX * R, cyL + sgn * dirY * R,
+    );
+    gd.addColorStop(0, `rgba(255, 250, 244, ${bright.toFixed(3)})`);
+    gd.addColorStop(0.45, 'rgba(255, 250, 244, 0)');
+    gd.addColorStop(0.62, 'rgba(40, 28, 22, 0)');
+    gd.addColorStop(1, `rgba(40, 28, 22, ${dark.toFixed(3)})`);
+    lctx.fillStyle = gd;
+    lctx.fillRect(0, 0, layerW, layerH);
+  }
+
+  // ② 시인 밴드: 움직임(yaw·스웨이)에 따라 원단 위를 미끄러지는 부드러운 광
+  const bandX = cxL - ly * layerW * LIGHT_SHEEN_TRAVEL;
+  const bandW = layerW * 0.30;
+  const gs = lctx.createLinearGradient(
+    bandX - bandW - dirY * 0, cyL - 0, bandX + bandW, cyL,
+  );
+  gs.addColorStop(0, 'rgba(255, 252, 248, 0)');
+  gs.addColorStop(0.5, `rgba(255, 252, 248, ${LIGHT_SHEEN_ALPHA})`);
+  gs.addColorStop(1, 'rgba(255, 252, 248, 0)');
+  lctx.fillStyle = gs;
+  lctx.fillRect(0, 0, layerW, layerH);
+
+  // ③ 천장광: 상단이 은은하게 밝음 (정적, 원단이 위를 향한 물리)
+  const gt = lctx.createLinearGradient(0, 0, 0, layerH);
+  gt.addColorStop(0, `rgba(255, 251, 246, ${LIGHT_TOP_AMBIENT})`);
+  gt.addColorStop(0.5, 'rgba(255, 251, 246, 0)');
+  lctx.fillStyle = gt;
+  lctx.fillRect(0, 0, layerW, layerH);
+
   lctx.restore();
 
   return { layer, layerH };
@@ -200,7 +254,7 @@ export function drawBib(ctx, fit, product, opacity, image) {
   ctx.globalAlpha = opacity * fit.confidence;
 
   if (image?.complete && image.naturalWidth > 0) {
-    const { layer, layerH } = renderBibLayer(image, fit.width, fit.height, fit.yaw);
+    const { layer, layerH } = renderBibLayer(image, fit.width, fit.height, fit.yaw, 'front', fit.rotation);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(layer, -fit.width / 2, -layerH / 2, fit.width, layerH);

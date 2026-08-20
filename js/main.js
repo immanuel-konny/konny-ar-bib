@@ -8,7 +8,7 @@ import {
   DETECT,
   MOBILE_QUERY,
   STATUS_MESSAGES,
-} from './config.js?v31';
+} from './config.js?v32';
 import {
   poseToFit,
   faceToFit,
@@ -20,19 +20,19 @@ import {
   isPlausibleFit,
   applyFusionOffset,
   measureFusionOffset,
-} from './fit-math.js?v31';
-import { applyStopLock, smoothTimed } from './stabilizer.js?v31';
+} from './fit-math.js?v32';
+import { applyStopLock, smoothTimed } from './stabilizer.js?v32';
 import {
   drawBib,
   eraseMaskArea,
   drawBeautyLight,
-} from './renderer.js?v31';
-import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v31';
-import { SEG_MODEL_LITE_URL } from './config.js?v31';
+} from './renderer.js?v32';
+import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v32';
+import { SEG_MODEL_LITE_URL } from './config.js?v32';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v31';
+const APP_VERSION = 'v32';
 
 const $ = (id) => document.getElementById(id);
 

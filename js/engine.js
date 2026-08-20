@@ -1,6 +1,6 @@
 // MediaPipe Tasks Vision 로딩 — GPU 우선, 실패 시 CPU 폴백 (v15 동일)
 
-import { POSE_MODEL_URL, FACE_MODEL_URL, SEG_MODEL_URL, WASM_BASE_URL, VISION_BUNDLE_URL } from './config.js?v31';
+import { POSE_MODEL_URL, FACE_MODEL_URL, SEG_MODEL_URL, WASM_BASE_URL, VISION_BUNDLE_URL } from './config.js?v32';
 
 let visionModulePromise = null;
 let filesetPromise = null;
