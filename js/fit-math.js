@@ -1,7 +1,7 @@
 // 랜드마크 → 착용 핏 계산 (v15 알고리즘 이식)
 // fit = { x, y, width, height, rotation, yaw, pitch, confidence } (픽셀 좌표계)
 
-import { BIB_ASPECT, FACE_OVAL } from './config.js?v29';
+import { BIB_ASPECT, FACE_OVAL } from './config.js?v30';
 
 export const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
@@ -81,7 +81,7 @@ export function fuseFits(pose, face) {
     // 원단이 가슴까지 처지는 사례(2026-08-20 영상) — 창이 양방향 한계를 보장:
     // 위로는 인후를 덮지 않고, 아래로는 목 밑동에서 크게 떨어지지 않는다.
     y: clamp(
-      face.y * 0.6 + pose.y * 0.4,
+      face.y * 0.7 + pose.y * 0.3,
       face.y - face.height * 0.06,
       face.y + face.height * 0.42,
     ),

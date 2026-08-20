@@ -8,7 +8,7 @@ import {
   DETECT,
   MOBILE_QUERY,
   STATUS_MESSAGES,
-} from './config.js?v29';
+} from './config.js?v30';
 import {
   poseToFit,
   faceToFit,
@@ -20,20 +20,19 @@ import {
   isPlausibleFit,
   applyFusionOffset,
   measureFusionOffset,
-} from './fit-math.js?v29';
-import { applyStopLock, smoothTimed } from './stabilizer.js?v29';
+} from './fit-math.js?v30';
+import { applyStopLock, smoothTimed } from './stabilizer.js?v30';
 import {
   drawBib,
-  drawBibBack,
   eraseMaskArea,
   drawBeautyLight,
-} from './renderer.js?v29';
-import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v29';
-import { SEG_MODEL_LITE_URL } from './config.js?v29';
+} from './renderer.js?v30';
+import { createPoseLandmarker, createFaceLandmarker, createImageSegmenter } from './engine.js?v30';
+import { SEG_MODEL_LITE_URL } from './config.js?v30';
 
 // 빌드 버전 — index.html의 ?v= 캐시버스팅과 함께 올린다.
 // ?debug=1 HUD 첫 줄과 콘솔, __vtoDiag()에 표시되어 "지금 어떤 버전인지" 즉시 확인 가능.
-const APP_VERSION = 'v29';
+const APP_VERSION = 'v30';
 
 const $ = (id) => document.getElementById(id);
 
@@ -316,29 +315,9 @@ function renderFrame() {
   const drawFit = withAdjust(renderedFit);
   drawFit.yaw = Math.max(-1, Math.min(1, drawFit.yaw + swayYaw));
 
-  // ── 실물 구조 합성 (v27): 칼라는 목 뒤까지 360° 연결된다.
-  // ① 뒤판을 그리고 ② 사람 영역을 뚫어 배경(어깨 위·목 옆)에만 남긴 뒤
-  // ③ 앞판을 위에 얹는다. 앞판은 몸 실루엣으로 자르지 않는다 —
-  // 실물 칼라는 어깨 위로 얹혀 실루엣 밖까지 나가는 것이 정상이다.
-  const flip = state.mode === 'camera' && state.mirrored;
-  const segFresh =
-    segKeepCanvas && segKeepTs && performance.now() - segKeepTs < DETECT.segFreshMs;
-  if (segFresh) {
-    diag.backDraws = (diag.backDraws ?? 0) + 1;
-    ctx.globalAlpha = state.adjust.opacity * appearRamp;
-    drawBibBack(ctx, drawFit, bibImage);
-    ctx.globalAlpha = 1;
-    ctx.save();
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    if (flip) {
-      ctx.translate(canvas.width, 0);
-      ctx.scale(-1, 1);
-    }
-    ctx.drawImage(segKeepCanvas, 0, 0, canvas.width, canvas.height);
-    ctx.restore();
-  }
+  // 뒤판 레이어는 v30에서 제거 — 이중 스캘럽 테두리 아티팩트(사용자 확인).
+  // Spark 레퍼런스의 목 옆 모습은 평면 이미지 + 높은 배치 + 얼굴 가림만으로
+  // 만들어진다. 단순함이 정답.
 
   drawBib(ctx, drawFit, state.product, state.adjust.opacity * appearRamp, bibImage);
   if (mask) eraseMaskArea(ctx, mask);
